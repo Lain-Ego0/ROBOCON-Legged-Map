@@ -1,0 +1,233 @@
+<mujoco model="sdog2">
+  <compiler angle="radian" meshdir="meshes"/>
+
+  <default>
+    <!-- Visual geoms: no collision at all -->
+    <geom contype="0" conaffinity="0" condim="3" friction="1 1 0.005" type="mesh"/>
+    <!-- Collision geoms: only collide with ground (type 1), not with each other -->
+    <default class="collision">
+      <geom contype="2" conaffinity="1" group="3" type="mesh"/>
+    </default>
+  </default>
+
+  <asset>
+    <material name="metal" rgba="0.9 0.95 0.95 1"/>
+    <material name="black" rgba="0.3 0.3 0.3 1"/>
+    <material name="white" rgba="1 1 1 1"/>
+    <material name="gray" rgba="0.67 0.69 0.77 1"/>
+
+    <!-- Base -->
+    <mesh name="base_link_vis" file="base_link.obj"/>
+    <mesh name="base_link_col" file="base_link.obj"/>
+
+    <!-- RL leg -->
+    <mesh name="RL_hip_vis" file="RL_hip.obj"/>
+    <mesh name="RL_hip_col" file="RL_hip.obj"/>
+    <mesh name="RL_thigh_vis" file="RL_thigh.obj"/>
+    <mesh name="RL_thigh_col" file="RL_thigh.obj"/>
+    <mesh name="RL_calf_vis" file="RL_calf.obj"/>
+    <mesh name="RL_calf_col" file="RL_calf.obj"/>
+    <mesh name="RL_foot_vis" file="RL_foot.obj"/>
+    <mesh name="RL_foot_col" file="RL_foot.obj"/>
+
+    <!-- RR leg -->
+    <mesh name="RR_hip_vis" file="RR_hip.obj"/>
+    <mesh name="RR_hip_col" file="RR_hip.obj"/>
+    <mesh name="RR_thigh_vis" file="RR_thigh.obj"/>
+    <mesh name="RR_thigh_col" file="RR_thigh.obj"/>
+    <mesh name="RR_calf_vis" file="RR_calf.obj"/>
+    <mesh name="RR_calf_col" file="RR_calf.obj"/>
+    <mesh name="RR_foot_vis" file="RR_foot.obj"/>
+    <mesh name="RR_foot_col" file="RR_foot.obj"/>
+
+    <!-- FR leg -->
+    <mesh name="FR_hip_vis" file="FR_hip.obj"/>
+    <mesh name="FR_hip_col" file="FR_hip.obj"/>
+    <mesh name="FR_thigh_vis" file="FR_thigh.obj"/>
+    <mesh name="FR_thigh_col" file="FR_thigh.obj"/>
+    <mesh name="FR_calf_vis" file="FR_calf.obj"/>
+    <mesh name="FR_calf_col" file="FR_calf.obj"/>
+    <mesh name="FR_foot_vis" file="FR_foot.obj"/>
+    <mesh name="FR_foot_col" file="FR_foot.obj"/>
+
+    <!-- FL leg -->
+    <mesh name="FL_hip_vis" file="FL_hip.obj"/>
+    <mesh name="FL_hip_col" file="FL_hip.obj"/>
+    <mesh name="FL_thigh_vis" file="FL_thigh.obj"/>
+    <mesh name="FL_thigh_col" file="FL_thigh.obj"/>
+    <mesh name="FL_calf_vis" file="FL_calf.obj"/>
+    <mesh name="FL_calf_col" file="FL_calf.obj"/>
+    <mesh name="FL_foot_vis" file="FL_foot.obj"/>
+    <mesh name="FL_foot_col" file="FL_foot.obj"/>
+  </asset>
+
+  <worldbody>
+    <body name="base_link" pos="0 0 0.4">
+      <inertial pos="0.014478 0.0001355 -0.0027127"
+                mass="4.2719"
+                fullinertia="0.01292039 0.03772913 0.04632371 -8.164E-05 -0.00033706 -1.848E-05"/>
+      <freejoint name="root"/>
+      <!-- Visual -->
+      <geom mesh="base_link_vis" material="gray"/>
+      <!-- Collision -->
+      <geom mesh="base_link_col" class="collision" rgba="1 1 1 0.3"/>
+
+      <!-- ===== RL Leg (Rear Left) ===== -->
+      <body name="RL_hip" pos="-0.147 0.0485 0">
+        <inertial pos="-0.039981 -0.0022222 -1.8726E-09"
+                  mass="0.45019"
+                  fullinertia="0.00024248 0.0011037 0.00099715 4.402E-05 0 -5.0256E-12"/>
+        <joint name="RL_hip_joint" type="hinge" axis="1 0 0" limited="true" range="-1.4 1.4" damping="0" armature="0" frictionloss="0"/>
+        <geom mesh="RL_hip_vis" material="metal"/>
+        <geom mesh="RL_hip_col" class="collision" rgba="1 1 1 0.3"/>
+
+        <body name="RL_thigh" pos="-0.044 0.018 0">
+          <inertial pos="-0.0024221 0.045951 -0.038919"
+                    mass="0.95949"
+                    fullinertia="0.0081819 0.0060991 0.0029149 -0.00015667 0.00028798 -0.0023776"/>
+          <joint name="RL_thigh_joint" type="hinge" axis="0 -1 0" limited="true" range="-2.8 1.5" damping="0" armature="0" frictionloss="0"/>
+          <geom mesh="RL_thigh_vis" material="metal"/>
+          <geom mesh="RL_thigh_col" class="collision" rgba="1 1 1 0.3"/>
+
+          <body name="RL_calf" pos="0 0.063 -0.21">
+            <inertial pos="0.0067777 1.9855E-06 -0.10037"
+                      mass="0.14071"
+                      fullinertia="0.0021875 0.0022056 2.369E-05 0 -0.00010679 -5E-08"/>
+            <joint name="RL_calf_joint" type="hinge" axis="0 -1 0" limited="true" range="0.73 2.627" damping="0" armature="0" frictionloss="0"/>
+            <geom mesh="RL_calf_vis" material="metal"/>
+            <geom mesh="RL_calf_col" class="collision" rgba="1 1 1 0.3"/>
+            <body name="RL_foot" pos="0 0 -0.199007934855877">
+              <inertial pos="-0.0018355 -2.7756E-17 -0.0072422"
+                        mass="0.013247"
+                        fullinertia="1.52E-06 2.06E-06 1.52E-06 0 0 0"/>
+              <geom mesh="RL_foot_vis" material="black"/>
+              <geom mesh="RL_foot_col" class="collision" rgba="1 1 1 0.3"/>
+            </body>
+          </body>
+        </body>
+      </body>
+
+      <!-- ===== RR Leg (Rear Right) ===== -->
+      <body name="RR_hip" pos="-0.147 -0.0485 0">
+        <inertial pos="-0.039981 0.0022222 1.8726E-09"
+                  mass="0.45019"
+                  fullinertia="0.00024248 0.0011037 0.00099715 -4.402E-05 0 0"/>
+        <joint name="RR_hip_joint" type="hinge" axis="1 0 0" limited="true" range="-1.4 1.4" damping="0" armature="0" frictionloss="0"/>
+        <geom mesh="RR_hip_vis" material="metal"/>
+        <geom mesh="RR_hip_col" class="collision" rgba="1 1 1 0.3"/>
+
+        <body name="RR_thigh" pos="-0.044 -0.018 0">
+          <inertial pos="-0.0026191 -0.046317 -0.039171"
+                    mass="0.97456"
+                    fullinertia="0.0083492 0.0062077 0.0030069 0.00016405 0.00029587 0.0024412"/>
+          <joint name="RR_thigh_joint" type="hinge" axis="0 1 0" limited="true" range="-1.5 2.8" damping="0" armature="0" frictionloss="0"/>
+          <geom mesh="RR_thigh_vis" material="metal"/>
+          <geom mesh="RR_thigh_col" class="collision" rgba="1 1 1 0.3"/>
+
+          <body name="RR_calf" pos="0 -0.063 -0.21">
+            <inertial pos="0.0067777 1.9855E-06 -0.10037"
+                      mass="0.14071"
+                      fullinertia="0.0021875 0.0022056 2.369E-05 0 -0.00010679 -5E-08"/>
+            <joint name="RR_calf_joint" type="hinge" axis="0 1 0" limited="true" range="-2.627 -0.73" damping="0" armature="0" frictionloss="0"/>
+            <geom mesh="RR_calf_vis" material="metal"/>
+            <geom mesh="RR_calf_col" class="collision" rgba="1 1 1 0.3"/>
+            <body name="RR_foot" pos="0 0 -0.199007934855878">
+              <inertial pos="-0.0018355 -2.7756E-17 -0.0072422"
+                        mass="0.013247"
+                        fullinertia="1.52E-06 2.06E-06 1.52E-06 0 0 0"/>
+              <geom mesh="RR_foot_vis" material="black"/>
+              <geom mesh="RR_foot_col" class="collision" rgba="1 1 1 0.3"/>
+            </body>
+          </body>
+        </body>
+      </body>
+
+      <!-- ===== FR Leg (Front Right) ===== -->
+      <body name="FR_hip" pos="0.147 -0.0485 0">
+        <inertial pos="0.039981 0.0022222 -1.8726E-09"
+                  mass="0.45019"
+                  fullinertia="0.00024248 0.0011037 0.00099715 4.402E-05 0 0"/>
+        <joint name="FR_hip_joint" type="hinge" axis="-1 0 0" limited="true" range="-1.4 1.4" damping="0" armature="0" frictionloss="0"/>
+        <geom mesh="FR_hip_vis" material="metal"/>
+        <geom mesh="FR_hip_col" class="collision" rgba="1 1 1 0.3"/>
+
+        <body name="FR_thigh" pos="0.044 -0.018 0">
+          <inertial pos="-0.0027343 -0.046317 -0.039501"
+                    mass="0.97456"
+                    fullinertia="0.0083518 0.0062077 0.0030043 0.00016523 0.00029267 0.0024446"/>
+          <joint name="FR_thigh_joint" type="hinge" axis="0 1 0" limited="true" range="-1.5 2.8" damping="0" armature="0" frictionloss="0"/>
+          <geom mesh="FR_thigh_vis" material="metal"/>
+          <geom mesh="FR_thigh_col" class="collision" rgba="1 1 1 0.3"/>
+
+          <body name="FR_calf" pos="0 -0.063 -0.21">
+            <inertial pos="0.0067777 1.9855E-06 -0.10037"
+                      mass="0.14071"
+                      fullinertia="0.0021875 0.0022056 2.369E-05 0 -0.00010679 -5E-08"/>
+            <joint name="FR_calf_joint" type="hinge" axis="0 1 0" limited="true" range="-2.627 -0.73" damping="0" armature="0" frictionloss="0"/>
+            <geom mesh="FR_calf_vis" material="metal"/>
+            <geom mesh="FR_calf_col" class="collision" rgba="1 1 1 0.3"/>
+            <body name="FR_foot" pos="0 0 -0.199007934855877">
+              <inertial pos="-0.0018355 -2.7756E-17 -0.0072422"
+                        mass="0.013247"
+                        fullinertia="1.52E-06 2.06E-06 1.52E-06 0 0 0"/>
+              <geom mesh="FR_foot_vis" material="black"/>
+              <geom mesh="FR_foot_col" class="collision" rgba="1 1 1 0.3"/>
+            </body>
+          </body>
+        </body>
+      </body>
+
+      <!-- ===== FL Leg (Front Left) ===== -->
+      <body name="FL_hip" pos="0.147 0.0485 0">
+        <inertial pos="0.039981 -0.0022222 -1.8726E-09"
+                  mass="0.45019"
+                  fullinertia="0.00024248 0.0011037 0.00099715 -4.402E-05 0 0"/>
+        <joint name="FL_hip_joint" type="hinge" axis="-1 0 0" limited="true" range="-1.4 1.4" damping="0" armature="0" frictionloss="0"/>
+        <geom mesh="FL_hip_vis" material="metal"/>
+        <geom mesh="FL_hip_col" class="collision" rgba="1 1 1 0.3"/>
+
+        <body name="FL_thigh" pos="0.044 0.018 0">
+          <inertial pos="-0.0025853 0.045437 -0.039114"
+                    mass="0.95949"
+                    fullinertia="0.0081057 0.0060991 0.0028664 -0.00015582 0.00029042 -0.0023423"/>
+          <joint name="FL_thigh_joint" type="hinge" axis="0 -1 0" limited="true" range="-2.8 1.5" damping="0" armature="0" frictionloss="0"/>
+          <geom mesh="FL_thigh_vis" material="metal"/>
+          <geom mesh="FL_thigh_col" class="collision" rgba="1 1 1 0.3"/>
+
+          <body name="FL_calf" pos="0 0.062 -0.21">
+            <inertial pos="0.0067777 1.9855E-06 -0.10037"
+                      mass="0.14071"
+                      fullinertia="0.0021875 0.0022056 2.369E-05 0 -0.00010679 -5E-08"/>
+            <joint name="FL_calf_joint" type="hinge" axis="0 -1 0" limited="true" range="0.73 2.627" damping="0" armature="0" frictionloss="0"/>
+            <geom mesh="FL_calf_vis" material="metal"/>
+            <geom mesh="FL_calf_col" class="collision" rgba="1 1 1 0.3"/>
+            <body name="FL_foot" pos="0 0 -0.199007934855877">
+              <inertial pos="-0.0018355 0 -0.0072422"
+                        mass="0.013247"
+                        fullinertia="1.52E-06 2.06E-06 1.52E-06 0 0 0"/>
+              <geom mesh="FL_foot_vis" material="black"/>
+              <geom mesh="FL_foot_col" class="collision" rgba="1 1 1 0.3"/>
+            </body>
+          </body>
+        </body>
+      </body>
+
+    </body>
+  </worldbody>
+
+  <actuator>
+    <motor name="FL_hip"    joint="FL_hip_joint"/>
+    <motor name="FL_thigh"  joint="FL_thigh_joint"/>
+    <motor name="FL_calf"   joint="FL_calf_joint"/>
+    <motor name="FR_hip"    joint="FR_hip_joint"/>
+    <motor name="FR_thigh"  joint="FR_thigh_joint"/>
+    <motor name="FR_calf"   joint="FR_calf_joint"/>
+    <motor name="RL_hip"    joint="RL_hip_joint"/>
+    <motor name="RL_thigh"  joint="RL_thigh_joint"/>
+    <motor name="RL_calf"   joint="RL_calf_joint"/>
+    <motor name="RR_hip"    joint="RR_hip_joint"/>
+    <motor name="RR_thigh"  joint="RR_thigh_joint"/>
+    <motor name="RR_calf"   joint="RR_calf_joint"/>
+  </actuator>
+
+</mujoco>
