@@ -6,7 +6,20 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .config import CATEGORIES, HOME, STORAGE
+from .config import (
+    ARM_CARRY_MIN_HEIGHT,
+    ARM_GRIP_HEIGHT_OFFSET,
+    ARM_GRIP_LONGITUDINAL_OFFSET,
+    ARM_GRIP_SIDE_OFFSET,
+    ARM_REACH_BOX_Z_MAX,
+    ARM_REACH_BOX_Z_MIN,
+    ARM_REACH_LONGITUDINAL,
+    ARM_REACH_SIDE_MAX,
+    ARM_REACH_SIDE_MIN,
+    CATEGORIES,
+    HOME,
+    STORAGE,
+)
 
 
 @dataclass
@@ -29,10 +42,11 @@ class Cargo:
 class CargoManager:
     """Owns the eight 200 mm cargo boxes and the simplified manipulation model.
 
-    The challenge does not require a manipulation arm: a robot flank touching
-    a box is treated as a grasp, and at most one box may be carried per flank.
-    Carried boxes are kinematically locked to the base and their collision is
-    disabled to avoid solver explosions from an intersecting grasp volume.
+    Two fixed grasp points approximate limited-DoF side arms. A box can be
+    grasped only inside a bounded workspace near the middle of a free flank.
+    Carried boxes are kinematically locked to the corresponding grip point,
+    and their collision is disabled to keep the
+    contact solver stable.
     """
 
     def __init__(self, model, data):
@@ -117,7 +131,7 @@ class CargoManager:
 
     # ----------------------------------------------------------------- pickup
     def try_pickup(self, base_pos: np.ndarray, yaw: float, max_carry: int = 2, target_index: int | None = None) -> Cargo | None:
-        """Attach a box that is touching a free robot flank (optionally only the target)."""
+        """Grasp a box inside the reachable centre section of a free side arm."""
         if self.carried_count >= max_carry:
             return None
         c, s = math.cos(yaw), math.sin(yaw)
@@ -127,14 +141,14 @@ class CargoManager:
             if target_index is not None and cargo.index != target_index:
                 continue
             p = self.position(cargo)
-            if p[2] < -0.2 or p[2] > 0.42:
+            if not ARM_REACH_BOX_Z_MIN <= p[2] <= ARM_REACH_BOX_Z_MAX:
                 continue
             dx, dy = p[0] - base_pos[0], p[1] - base_pos[1]
             lx = c * dx + s * dy
             ly = -s * dx + c * dy
-            if abs(lx) > 0.46:
+            if abs(lx) > ARM_REACH_LONGITUDINAL:
                 continue
-            if not (0.12 < abs(ly) < 0.72):
+            if not (ARM_REACH_SIDE_MIN <= abs(ly) <= ARM_REACH_SIDE_MAX):
                 continue
             side = 1 if ly > 0 else -1
             if not self.side_available(side):
@@ -156,10 +170,11 @@ class CargoManager:
         for cargo in self.cargo:
             if cargo.side == 0:
                 continue
-            off_y = cargo.side * 0.34
-            x = pos[0] - s * off_y
-            y = pos[1] + c * off_y
-            z = max(0.18, pos[2] - 0.02)
+            off_x = ARM_GRIP_LONGITUDINAL_OFFSET
+            off_y = cargo.side * ARM_GRIP_SIDE_OFFSET
+            x = pos[0] + c * off_x - s * off_y
+            y = pos[1] + s * off_x + c * off_y
+            z = max(ARM_CARRY_MIN_HEIGHT, pos[2] + ARM_GRIP_HEIGHT_OFFSET)
             self.data.qpos[cargo.qpos_adr:cargo.qpos_adr + 3] = [x, y, z]
             self.data.qpos[cargo.qpos_adr + 3:cargo.qpos_adr + 7] = quat
             self.data.qvel[cargo.dof_adr:cargo.dof_adr + 6] = 0.0
@@ -179,12 +194,13 @@ class CargoManager:
     def touching_home_side(self, category: str, side: int, base_pos: np.ndarray, yaw: float) -> bool:
         """Whether the carried box on one flank overlaps its matching home cell."""
         cx, cy = HOME[category]
-        off_y = side * 0.34
-        box_x = base_pos[0] - math.sin(yaw) * off_y
-        box_y = base_pos[1] + math.cos(yaw) * off_y
+        c, s = math.cos(yaw), math.sin(yaw)
+        off_x = ARM_GRIP_LONGITUDINAL_OFFSET
+        off_y = side * ARM_GRIP_SIDE_OFFSET
+        box_x = base_pos[0] + c * off_x - s * off_y
+        box_y = base_pos[1] + s * off_x + c * off_y
         # SAT for the rotated 0.2 m cargo square against the 0.3 m home square.
         dx, dy = box_x - cx, box_y - cy
-        c, s = math.cos(yaw), math.sin(yaw)
         home_radius = 0.15 * (abs(c) + abs(s))
         return (abs(dx) <= 0.25 and abs(dy) <= 0.25
                 and abs(dx * c + dy * s) <= 0.1 + home_radius

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import pathlib
 import sys
 import time
@@ -35,10 +36,15 @@ def main():
     scanner = LidarScanner3D(model, data)
     sensor_ids = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SENSOR, name) for name in ("imu_accel", "imu_gyro")]
     sensor_adrs = [int(model.sensor_adr[sid]) for sid in sensor_ids]
+    glim_build_dir = pathlib.Path(
+        os.environ.get("ROBOCON_GLIM_BUILD_DIR", root / "build/glim-cpu-runtime-no-cuda")
+    )
+    if not glim_build_dir.is_absolute():
+        glim_build_dir = root / glim_build_dir
     bridge = GLIMBridge(
-        root / "build/glim-cpu-runtime/mujoco_glim_bridge",
+        glim_build_dir / "mujoco_glim_bridge",
         root / "slam3d/config",
-        root / "build/glim-cpu-runtime",
+        glim_build_dir,
     )
     imu_batch = []
     scans = 0

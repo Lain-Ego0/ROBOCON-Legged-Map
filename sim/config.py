@@ -74,6 +74,18 @@ MISSION_SECONDS = 180.0
 CARRY_LIMIT = 2
 ROBOT_RADIUS = 0.30
 
+# Simplified two-arm workspace, expressed in the robot body frame. The box
+# centre must sit beside the middle section of a free flank to be grasped.
+ARM_REACH_LONGITUDINAL = 0.16
+ARM_REACH_SIDE_MIN = 0.23
+ARM_REACH_SIDE_MAX = 0.52
+ARM_REACH_BOX_Z_MIN = 0.04
+ARM_REACH_BOX_Z_MAX = 0.24
+ARM_GRIP_LONGITUDINAL_OFFSET = 0.0
+ARM_GRIP_SIDE_OFFSET = 0.34
+ARM_GRIP_HEIGHT_OFFSET = -0.02
+ARM_CARRY_MIN_HEIGHT = 0.18
+
 # Policy command envelope (m/s, m/s, rad/s).
 CMD_LIMITS = (1.15, 0.55, 1.20)
 CRUISE_SPEED = 0.62

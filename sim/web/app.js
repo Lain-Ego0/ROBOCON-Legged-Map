@@ -420,7 +420,7 @@
     const locEl = $("#locState");
     const glim = loc.glim_status || {};
     const hasGlimPose = Boolean(glim.ready && loc.glim_valid && loc.glim_pose);
-    const status = hasGlimPose ? "GLIM GPU" : glim.ready && loc.glim_pose ? "GLIM 位姿过期" : glim.ready ? "GLIM 初始化" : "GLIM 未运行";
+    const status = hasGlimPose ? "GLIM 3D" : glim.ready && loc.glim_pose ? "GLIM 位姿过期" : glim.ready ? "GLIM 初始化" : "GLIM 未运行";
     locEl.textContent = status;
     locEl.className = hasGlimPose ? "mint" : glim.ready ? "amber" : "red";
     $("#locErr").textContent = loc.glim_error == null ? "等待有效位姿" : `误差 ${loc.glim_error.toFixed(3)} m`;

@@ -13,14 +13,14 @@ checkout in `build/glim-upstream/`; the build script copies it into the ignored
 `build/glim-cpu-source/`, applies the API compatibility patch in
 `slam3d/patches/`, builds CPU odometry, passthrough submapping, GICP pose-graph
 modules and the native sensor bridge, and writes generated files to
-`build/glim-cpu-runtime/`:
+`build/glim-cpu-runtime-no-cuda/`:
 
 ```bash
 ./slam3d/build_glim.sh
 ```
 
 Override source, patched-source, or output locations with `GLIM_SOURCE`,
-`GLIM_PATCHED_SOURCE_DIR`, and `GLIM_BUILD_DIR`. The build sets
+`GLIM_PATCHED_SOURCE_DIR`, `GTSAM_POINTS_DIR`, and `GLIM_BUILD_DIR`. The build sets
 `BUILD_WITH_CUDA=OFF`; it requires CMake and the GLIM native dependencies.
 It disables the optional GLIM viewer and OpenCV.
 

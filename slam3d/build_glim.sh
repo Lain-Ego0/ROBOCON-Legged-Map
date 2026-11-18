@@ -3,8 +3,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GLIM_SOURCE="${GLIM_SOURCE:-$ROOT/build/glim-upstream}"
-BUILD_DIR="${GLIM_BUILD_DIR:-$ROOT/build/glim-cpu-runtime}"
+BUILD_DIR="${GLIM_BUILD_DIR:-$ROOT/build/glim-cpu-runtime-no-cuda}"
 PATCHED_SOURCE="${GLIM_PATCHED_SOURCE_DIR:-$ROOT/build/glim-cpu-source}"
+GTSAM_POINTS_DIR="${GTSAM_POINTS_DIR:-}"
 COMPAT_PATCH="$ROOT/slam3d/patches/glim-conda-api-compat.patch"
 
 missing=()
@@ -35,8 +36,15 @@ if ! rg -q 'pred_T_odom_imu\.pose\(\)\.rotation\(\)' \
   fi
 fi
 
-cmake -S "$ROOT/slam3d/native" -B "$BUILD_DIR" \
-  -DGLIM_SOURCE_DIR="$PATCHED_SOURCE" \
+cmake_args=(
+  -S "$ROOT/slam3d/native"
+  -B "$BUILD_DIR"
+  "-DGLIM_SOURCE_DIR=$PATCHED_SOURCE"
   -DCMAKE_BUILD_TYPE=Release \
   -DBUILD_WITH_CUDA=OFF
+)
+if [[ -n "$GTSAM_POINTS_DIR" ]]; then
+  cmake_args+=("-Dgtsam_points_DIR=$GTSAM_POINTS_DIR")
+fi
+cmake "${cmake_args[@]}"
 cmake --build "$BUILD_DIR" --parallel "${BUILD_JOBS:-4}"

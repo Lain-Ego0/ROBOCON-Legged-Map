@@ -56,6 +56,9 @@ for module in ("mujoco", "numpy", "PIL", "scipy", "torch"):
 import mujoco
 import torch
 
+if torch.version.cuda is not None:
+    raise RuntimeError("A CPU-only PyTorch build is required, but this wheel includes CUDA")
+
 print(f"MuJoCo {mujoco.__version__}")
 print(f"PyTorch {torch.__version__} (policy inference runs on CPU)")
 PY
@@ -82,9 +85,18 @@ if ((${#missing[@]})); then
   exit 2
 fi
 
-printf '\nBuilding GLIM CPU backend...\n'
-GLIM_SOURCE="$GLIM_SOURCE" ./slam3d/build_glim.sh
-printf '\nValidating GLIM CPU modules...\n'
-./slam3d/validate_glim.sh
+GTSAM_POINTS_INSTALL_PREFIX="${GTSAM_POINTS_INSTALL_PREFIX:-$ROOT/build/glim-cpu-deps}"
+GLIM_BUILD_DIR="${GLIM_BUILD_DIR:-$ROOT/build/glim-cpu-runtime-no-cuda}"
+printf '\nBuilding CPU-only gtsam_points dependency...\n'
+GTSAM_POINTS_INSTALL_PREFIX="$GTSAM_POINTS_INSTALL_PREFIX" ./scripts/build_gtsam_points_cpu.sh
 
-printf '\nEnvironment setup complete. Start the simulator with: uv run python -m sim.app --no-open\n'
+printf '\nBuilding GLIM CPU backend...\n'
+GLIM_SOURCE="$GLIM_SOURCE" \
+GLIM_BUILD_DIR="$GLIM_BUILD_DIR" \
+GTSAM_POINTS_DIR="$GTSAM_POINTS_INSTALL_PREFIX/lib/cmake/gtsam_points" \
+./slam3d/build_glim.sh
+printf '\nValidating GLIM CPU modules...\n'
+GLIM_BUILD_DIR="$GLIM_BUILD_DIR" ./slam3d/validate_glim.sh
+
+GLIM_BUILD_DIR_RELATIVE="$(realpath --relative-to="$ROOT" "$GLIM_BUILD_DIR")"
+printf '\nEnvironment setup complete. Start the simulator with: ROBOCON_GLIM_BUILD_DIR="%s" uv run python -m sim.app --no-open\n' "$GLIM_BUILD_DIR_RELATIVE"

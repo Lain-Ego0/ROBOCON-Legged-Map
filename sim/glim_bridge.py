@@ -1,4 +1,4 @@
-"""Bounded asynchronous bridge to the native GLIM CUDA process."""
+"""Bounded asynchronous bridge to the native GLIM process."""
 from __future__ import annotations
 
 import json
@@ -128,7 +128,7 @@ class GLIMBridge:
         if count:
             with self.lock:
                 self.sync_warning_count += count
-            log_file.write(f"Suppressed repeated CUDA synchronous-linearization warnings: {count}\n")
+            log_file.write(f"Suppressed repeated synchronous-linearization warnings: {count}\n")
             log_file.flush()
 
     def _stop_process(self):

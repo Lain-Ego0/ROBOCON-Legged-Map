@@ -231,10 +231,15 @@ class Simulator(threading.Thread):
         self.mission = MissionController(self.cargo, self.grid, self.scoring, START_LOGISTICS[:2])
         self.localizer = GLIMLocalizer(START_LOGISTICS[:2], 0.0)
         root = pathlib.Path(__file__).resolve().parents[1]
+        glim_build_dir = pathlib.Path(
+            os.environ.get("ROBOCON_GLIM_BUILD_DIR", root / "build/glim-cpu-runtime-no-cuda")
+        )
+        if not glim_build_dir.is_absolute():
+            glim_build_dir = root / glim_build_dir
         self.glim_bridge = GLIMBridge(
-            root / "build/glim-cpu-runtime/mujoco_glim_bridge",
+            glim_build_dir / "mujoco_glim_bridge",
             root / "slam3d/config",
-            root / "build/glim-cpu-runtime",
+            glim_build_dir,
         )
         self.glim_pose = None
         self.glim_stamp = None
