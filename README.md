@@ -4,20 +4,19 @@
 
 ## 启动
 
-需要 Linux、可用的图形设备与 EGL，以及安装了 MuJoCo、PyTorch、NumPy、SciPy 和 Pillow 的 Python 环境。`run_sim.sh` 默认调用 `python3`，也可以指定虚拟环境中的解释器：
+需要 Linux、可用的图形设备与 EGL。首次配置 Python 依赖；若未安装 `uv`，脚本会安装到当前用户目录：
 
 ```bash
-./run_sim.sh --no-open
+./scripts/setup_env.sh --python-only
 ```
 
-浏览器访问 <http://127.0.0.1:8731/>。若端口已占用，可以更换端口或 Python 环境：
+需要 3D 定位时，先按[复现说明](sim/docs/reproduction.md)准备 CUDA Toolkit、GLIM 原生依赖和 GLIM 源码，再运行 `./scripts/setup_env.sh` 完成检查、构建和验证。启动仿真：
 
 ```bash
-./run_sim.sh --port 8740 --no-open
-SIM_PYTHON="$(command -v python3)" ./run_sim.sh --port 8740
+uv run python -m sim.app --no-open
 ```
 
-启动前需要先构建 `build/glim-runtime/mujoco_glim_bridge`。从克隆仓库到启动和验收的步骤见[复现说明](sim/docs/reproduction.md)。仿真服务退出时会一并关闭它启动的 GLIM 子进程；结束服务可在启动终端按 `Ctrl+C`。
+浏览器访问 <http://127.0.0.1:8731/>。若端口已占用，可以添加 `--port 8740`。完整环境准备、构建与验收步骤见[复现说明](sim/docs/reproduction.md)。仿真服务退出时会一并关闭它启动的 GLIM 子进程；结束服务可在启动终端按 `Ctrl+C`。
 
 ## 操作
 
@@ -36,7 +35,7 @@ SIM_PYTHON="$(command -v python3)" ./run_sim.sh --port 8740
 ## 常用检查
 
 ```bash
-python -m compileall -q sim slam3d
+uv run python -m compileall -q sim slam3d
 node --check sim/web/app.js
 git diff --check
 ```

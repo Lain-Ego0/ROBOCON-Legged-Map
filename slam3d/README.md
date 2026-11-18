@@ -63,7 +63,7 @@ with environments that provide the native GLIM libraries and MuJoCo:
 
 ```bash
 ./slam3d/validate_glim.sh
-python slam3d/replay_mujoco.py --duration 24
+uv run python slam3d/replay_mujoco.py --duration 24
 ```
 
 The replay advances simulation faster than real time. Use it to check the

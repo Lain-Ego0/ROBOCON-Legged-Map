@@ -117,7 +117,12 @@ class SdogPolicy:
             self.policy.reset()
         self.mujoco.mj_forward(self.model, data)
 
-    def infer_step(self, command: np.ndarray, pre_step: Callable[[], None] | None = None) -> None:
+    def infer_step(
+        self,
+        command: np.ndarray,
+        pre_step: Callable[[], None] | None = None,
+        post_step: Callable[[], None] | None = None,
+    ) -> None:
         data = self.data
         self.obs[0:3] = data.qvel[self.dof_adr + 3:self.dof_adr + 6] * ANGULAR_SCALE
         self.obs[3:6] = projected_gravity(data.qpos[self.qpos_adr + 3:self.qpos_adr + 7])
@@ -138,6 +143,8 @@ class SdogPolicy:
             effort = pd_control(target, data.qpos[self.qpos_ids], data.qvel[self.qvel_ids])
             data.ctrl[self.actuator_ids] = effort
             self.mujoco.mj_step(self.model, data)
+            if post_step is not None:
+                post_step()
 
     def pose(self) -> tuple[np.ndarray, np.ndarray, float]:
         data = self.data

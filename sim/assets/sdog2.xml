@@ -63,6 +63,7 @@
 
   <worldbody>
     <body name="base_link" pos="0 0 0.4">
+      <site name="imu_lidar_site" pos="0 0 0.085" size="0.008" rgba="0 0 0 0"/>
       <inertial pos="0.014478 0.0001355 -0.0027127"
                 mass="4.2719"
                 fullinertia="0.01292039 0.03772913 0.04632371 -8.164E-05 -0.00033706 -1.848E-05"/>

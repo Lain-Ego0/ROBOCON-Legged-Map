@@ -102,6 +102,10 @@ def build() -> pathlib.Path:
         )
     field = field.replace('</worldbody>', robot_world + '\n' + '\n'.join(blocks) + '\n  </worldbody>', 1)
     field = field.replace('</mujoco>', f'<actuator>{actuators}</actuator>\n</mujoco>', 1)
+    field = field.replace(
+        '</mujoco>',
+        '<sensor><accelerometer name="imu_accel" site="imu_lidar_site"/>'
+        '<gyro name="imu_gyro" site="imu_lidar_site"/></sensor>\n</mujoco>', 1)
 
     # Cinematic viewport and lighting for the WebUI.
     field = re.sub(

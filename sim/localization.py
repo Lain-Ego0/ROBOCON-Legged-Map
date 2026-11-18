@@ -1,15 +1,4 @@
-"""GLIM-style 2.5D range-inertial localization against a prior field map.
-
-The real GLIM pipeline couples IMU pre-integration with GPU-accelerated
-scan-to-submap factors.  This simulator keeps the same estimator structure but
-uses a lighter 2D formulation that is fast enough to run beside MuJoCo:
-
-* a prior point/normal map is sampled from the static competition geometry,
-* a 3-layer, 360-ray LiDAR is ray-cast against the live MuJoCo field,
-* a constant-velocity + gyro prediction supplies the IMU/odometry factor,
-* robust point-to-line scan matching supplies the range factor,
-* a coarse global branch search recovers from tracking loss.
-"""
+"""2D range-inertial SLAM inspired by GLIM's keyframe/submap architecture."""
 from __future__ import annotations
 
 import math
@@ -18,7 +7,9 @@ from dataclasses import dataclass
 
 import numpy as np
 from scipy.ndimage import distance_transform_edt
+from scipy.optimize import least_squares
 from scipy.spatial import cKDTree
+from scipy.sparse import lil_matrix
 
 
 @dataclass
@@ -34,6 +25,251 @@ class LocalizationResult:
     latency_ms: float
     scan_local: np.ndarray
     trajectory: list
+
+
+def _wrap(angle: float) -> float:
+    return (angle + math.pi) % (2.0 * math.pi) - math.pi
+
+
+def _between(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    c, s = math.cos(a[2]), math.sin(a[2])
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    return np.array([c * dx + s * dy, -s * dx + c * dy, _wrap(b[2] - a[2])])
+
+
+class OnlineSubmapMapper:
+    """2D range-inertial SLAM: keyframe submaps, robust registration and loop factors."""
+
+    def __init__(self):
+        self.poses: list[np.ndarray] = []
+        self.scans: list[np.ndarray] = []
+        self.edges: list[tuple[int, int, np.ndarray, float, bool]] = []
+        self.last_insert_time = -1.0
+        self.loop_closures = 0
+        self.last_loop_keyframe = -20
+        self.loop_pairs: set[tuple[int, int]] = set()
+        self._target_cache = None
+        self._target_pose_count = -1
+
+    def reset(self):
+        self.poses.clear()
+        self.scans.clear()
+        self.edges.clear()
+        self.last_insert_time = -1.0
+        self.loop_closures = 0
+        self.last_loop_keyframe = -20
+        self.loop_pairs.clear()
+        self._target_cache = None
+        self._target_pose_count = -1
+
+    @staticmethod
+    def _world(scan: np.ndarray, pose: np.ndarray) -> np.ndarray:
+        c, s = math.cos(pose[2]), math.sin(pose[2])
+        return scan @ np.array([[c, s], [-s, c]]) + pose[:2]
+
+    @staticmethod
+    def _voxel(points: np.ndarray, size: float = 0.055) -> np.ndarray:
+        if len(points) == 0:
+            return points.reshape(-1, 2)
+        keys = np.floor(points / size).astype(np.int32)
+        _, idx = np.unique(keys, axis=0, return_index=True)
+        return points[np.sort(idx)]
+
+    def _target(self, pose: np.ndarray, radius: float = 4.5):
+        if not self.poses:
+            return None
+        if self._target_cache is not None and self._target_pose_count == len(self.poses):
+            return self._target_cache
+        ids = list(range(max(0, len(self.poses) - 14), len(self.poses)))
+        chunks = [self._world(self.scans[i], self.poses[i]) for i in ids]
+        self._target_cache = self._make_target(np.concatenate(chunks), 0.07)
+        self._target_pose_count = len(self.poses)
+        return self._target_cache
+
+    @staticmethod
+    def _make_target(cloud: np.ndarray, voxel: float = 0.07):
+        points = OnlineSubmapMapper._voxel(cloud, voxel)
+        if len(points) < 12:
+            return None
+        tree = cKDTree(points)
+        _, ids = tree.query(points, k=min(9, len(points)))
+        neighbors = points[ids]
+        centered = neighbors - neighbors.mean(axis=1, keepdims=True)
+        cov = np.einsum("nki,nkj->nij", centered, centered)
+        _, vecs = np.linalg.eigh(cov)
+        normals = vecs[:, :, 0]
+        return points, normals, cKDTree(points)
+
+    @staticmethod
+    def _align(scan: np.ndarray, init: np.ndarray, target, iterations: int = 7):
+        pose = init.copy()
+        predicted = init.copy()
+        if target is None or len(scan) < 20:
+            return pose, 0, 1.0
+        points, normals, tree = target
+        source = scan[::max(1, len(scan) // 220)]
+        best = (0, 1.0)
+        for _ in range(iterations):
+            world = OnlineSubmapMapper._world(source, pose)
+            dist, ids = tree.query(world, k=1, workers=1)
+            mask = dist < 0.48
+            if mask.sum() < 18:
+                break
+            p, q, n = world[mask], points[ids[mask]], normals[ids[mask]]
+            r = np.einsum("ij,ij->i", n, p - q)
+            c, s = math.cos(pose[2]), math.sin(pose[2])
+            sx, sy = source[mask, 0], source[mask, 1]
+            J = np.stack((n[:, 0], n[:, 1],
+                n[:, 0] * (-s * sx - c * sy) + n[:, 1] * (c * sx - s * sy)), axis=1)
+            scale = 0.08
+            w = 1.0 / (1.0 + (r / scale) ** 2)
+            # Keep degenerate wall/corridor scans anchored to the inertial
+            # prediction instead of allowing a low-residual lateral slide.
+            prior_info = np.diag([1.0 / 0.045 ** 2, 1.0 / 0.045 ** 2, 1.0 / 0.035 ** 2])
+            prior_delta = pose - predicted
+            prior_delta[2] = _wrap(prior_delta[2])
+            H = J.T @ (J * w[:, None]) + prior_info + np.diag([1e-3, 1e-3, 3e-3])
+            g = J.T @ (r * w) + prior_info @ prior_delta
+            try:
+                delta = -np.linalg.solve(H, g)
+            except np.linalg.LinAlgError:
+                break
+            if not np.all(np.isfinite(delta)):
+                break
+            delta[:2] = np.clip(delta[:2], -0.045, 0.045)
+            delta[2] = np.clip(delta[2], -0.035, 0.035)
+            pose += delta
+            pose[2] = _wrap(pose[2])
+            rmse = float(np.sqrt(np.mean(r ** 2)))
+            if mask.sum() > best[0] or (mask.sum() == best[0] and rmse < best[1]):
+                best = (int(mask.sum()), rmse)
+            if np.linalg.norm(delta) < 1e-4:
+                break
+        return pose, best[0], best[1]
+
+    def track(self, scan: np.ndarray, predicted: np.ndarray, sim_time: float):
+        if not self.poses:
+            self._insert(scan, predicted, sim_time)
+            return predicted.copy(), len(scan), 0.0, False
+        result, inliers, rmse = self._align(scan, predicted, self._target(predicted))
+        accepted = inliers >= 22 and rmse < 0.20 and np.linalg.norm(result[:2] - predicted[:2]) < 0.10
+        pose = result if accepted else predicted.copy()
+        last = self.poses[-1]
+        trans = np.linalg.norm(pose[:2] - last[:2])
+        rot = abs(_wrap(pose[2] - last[2]))
+        if accepted and sim_time - self.last_insert_time >= 0.25 and (trans >= 0.22 or rot >= 0.18):
+            self._insert(scan, pose, sim_time)
+            pose = self.poses[-1].copy()
+            loop = self._try_loop(scan, pose)
+            if loop:
+                pose = self.poses[-1].copy()
+        return pose, inliers, rmse, accepted
+
+    def _insert(self, scan, pose, sim_time):
+        idx = len(self.poses)
+        pose = pose.copy()
+        if idx:
+            self.edges.append((idx - 1, idx, _between(self.poses[-1], pose), 1.0, False))
+        self.poses.append(pose)
+        self.scans.append(self._voxel(scan, 0.04))
+        self.last_insert_time = sim_time
+        self._target_cache = None
+        self._add_local_factors(idx)
+        self._optimize_graph()
+
+    def _add_local_factors(self, current: int):
+        if current < 4:
+            return
+        scan = self.scans[current]
+        pose = self.poses[current]
+        start = max(0, current - 10)
+        for ref in range(start, current - 2):
+            if np.linalg.norm(self.poses[ref][:2] - pose[:2]) > 3.0:
+                continue
+            target = self._make_target(self._world(self.scans[ref], self.poses[ref]))
+            solved, inliers, rmse = self._align(scan, pose, target, iterations=5)
+            correction = np.linalg.norm(solved[:2] - pose[:2])
+            if inliers >= 24 and rmse < 0.12 and correction < 0.20:
+                weight = float(np.clip(1.15 - 5.0 * rmse, 0.55, 1.15))
+                self.edges.append((ref, current, _between(self.poses[ref], solved), weight, False))
+
+    def _try_loop(self, scan, pose):
+        current = len(self.poses) - 1
+        if current < 20 or current - self.last_loop_keyframe < 18:
+            return False
+        candidates = [i for i in range(current - 18)
+                      if 0.35 < np.linalg.norm(self.poses[i][:2] - pose[:2]) < 4.5]
+        if not candidates:
+            return False
+        ranked = []
+        candidates.sort(key=lambda i: np.linalg.norm(self.poses[i][:2] - pose[:2]))
+        for i in candidates[:32]:
+            ids = [j for j in range(max(0, i - 2), min(current, i + 3))]
+            chunks = [self._world(self.scans[j], self.poses[j]) for j in ids]
+            cloud = self._voxel(np.concatenate(chunks), 0.07)
+            if len(cloud) < 30:
+                continue
+            tree = cKDTree(cloud)
+            _, near = tree.query(cloud, k=min(9, len(cloud)))
+            neighbors = cloud[near]
+            centered = neighbors - neighbors.mean(axis=1, keepdims=True)
+            _, vecs = np.linalg.eigh(np.einsum("nki,nkj->nij", centered, centered))
+            target = (cloud, vecs[:, :, 0], tree)
+            solved, inliers, rmse = self._align(scan, pose, target, iterations=12)
+            delta = np.linalg.norm(solved[:2] - pose[:2])
+            if inliers >= 45 and rmse < 0.055 and delta < 0.90:
+                rank = inliers - 100 * rmse - delta
+                ranked.append((rank, i, solved, rmse))
+        if not ranked:
+            return False
+        ranked.sort(key=lambda item: item[0], reverse=True)
+        best = ranked[0]
+        for alternative in ranked[1:]:
+            same_place = np.linalg.norm(self.poses[best[1]][:2] - self.poses[alternative[1]][:2]) < 0.55
+            if not same_place and best[0] - alternative[0] < 3.0:
+                return False
+        _, i, solved, rmse = best
+        pair = (i, current)
+        if pair in self.loop_pairs:
+            return False
+        self.edges.append((i, current, _between(self.poses[i], solved), max(0.5, 1.0 - rmse * 5), True))
+        self.loop_pairs.add(pair)
+        self._optimize_graph(fixed_lag=False)
+        self.loop_closures += 1
+        self.last_loop_keyframe = current
+        self._target_cache = None
+        return True
+
+    def _optimize_graph(self, fixed_lag: bool = True):
+        n = len(self.poses)
+        if n < 3:
+            return
+        initial = np.asarray(self.poses)
+        start = max(1, n - 12) if fixed_lag else 1
+        active_edges = [(a, b, z, w, loop) for a, b, z, w, loop in self.edges if b >= start]
+        x0 = initial[start:].reshape(-1)
+        sparsity = lil_matrix((3 * len(active_edges), 3 * (n - start)), dtype=np.int8)
+        for e, (a, b, *_rest) in enumerate(active_edges):
+            for node in (a, b):
+                if node >= start:
+                    col = node - start
+                    sparsity[3 * e:3 * e + 3, 3 * col:3 * (col + 1)] = 1
+
+        def residual(x):
+            poses = initial.copy()
+            poses[start:] = x.reshape(-1, 3)
+            out = []
+            for a, b, measurement, weight, loop in active_edges:
+                error = _between(measurement, _between(poses[a], poses[b]))
+                robust = 1.0 if not loop else 1.0 / math.sqrt(1.0 + (np.linalg.norm(error[:2]) / 0.18) ** 2)
+                out.extend(error * np.array([12.0, 12.0, 8.0]) * math.sqrt(weight * robust))
+            return np.asarray(out)
+
+        result = least_squares(residual, x0, jac_sparsity=sparsity.tocsr(),
+                               loss="soft_l1", f_scale=1.0, max_nfev=5, verbose=0)
+        optimized = initial.copy()
+        optimized[start:] = result.x.reshape(-1, 3)
+        self.poses = [p.copy() for p in optimized]
 
 
 class PriorMap:
@@ -183,9 +419,19 @@ class LidarScanner:
         self.angles = np.linspace(-np.pi, np.pi, rays_per_layer, endpoint=False)
         self.geomgroup = np.array([1, 0, 0, 0, 0, 0], dtype=np.uint8)
         self.max_range = 9.0
+        self.rng = np.random.default_rng(7)
+        base_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "base_link")
+        self.robot_bodies = set()
+        if base_id >= 0:
+            for body_id in range(model.nbody):
+                parent = body_id
+                while parent > 0 and parent != base_id:
+                    parent = int(model.body_parentid[parent])
+                if parent == base_id:
+                    self.robot_bodies.add(body_id)
 
     def scan(self, base_pos: np.ndarray, yaw: float, rng: np.random.Generator | None = None) -> np.ndarray:
-        rng = rng or np.random.default_rng()
+        rng = rng or self.rng
         heights = np.array([max(0.09, base_pos[2] - 0.15), base_pos[2], base_pos[2] + 0.17, base_pos[2] + 0.33])
         out = []
         gid = np.zeros(1, dtype=np.int32)
@@ -195,21 +441,114 @@ class LidarScanner:
             for a in self.angles:
                 world_a = yaw + a + rng.normal(0.0, 0.0022)
                 direction = np.array([math.cos(world_a), math.sin(world_a), 0.0])
-                dist = self.mujoco.mj_ray(
-                    self.model, self.data, origin, direction,
-                    self.geomgroup, 1, -1, gid)
-                if dist < 0.12 or dist > self.max_range:
+                travelled = 0.0
+                while travelled < self.max_range:
+                    dist = self.mujoco.mj_ray(
+                        self.model, self.data, origin, direction,
+                        self.geomgroup, 1, -1, gid)
+                    if dist < 0.0:
+                        break
+                    travelled += dist
+                    geom_id = int(gid[0])
+                    body_id = int(self.model.geom_bodyid[geom_id])
+                    geom_name = self.model.geom(geom_id).name or ""
+                    if body_id not in self.robot_bodies and not geom_name.startswith("block_"):
+                        break
+                    advance = dist + 0.015
+                    origin = origin + direction * advance
+                    travelled += 0.015
+                if dist < 0.12 or travelled > self.max_range:
                     continue
-                dist += rng.normal(0.0, 0.009)
+                dist = travelled + rng.normal(0.0, 0.004)
                 out.append((dist * math.cos(a), dist * math.sin(a)))
         return np.asarray(out, dtype=np.float64).reshape(-1, 2)
 
 
-class GLIMLocalizer:
-    """Range-inertial localizer with robust point-to-line scan matching."""
+class LidarScanner3D:
+    """Spinning multi-beam LiDAR synthesized from MuJoCo ray casts."""
 
-    def __init__(self, prior: PriorMap, spawn: tuple[float, float], yaw: float = 0.0):
-        self.prior = prior
+    def __init__(self, model, data, channels: int = 16, azimuths_per_step: int = 2):
+        import mujoco
+
+        self.mujoco = mujoco
+        self.model = model
+        self.data = data
+        self.site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "imu_lidar_site")
+        if self.site_id < 0:
+            raise ValueError("MuJoCo model is missing imu_lidar_site")
+        self.channels = channels
+        self.azimuths_per_step = azimuths_per_step
+        self.azimuth_slices = 300
+        self.elevations = np.deg2rad([-25, -18, -12, -8, -5, -2, 1, 4, 7, 10, 14, 19, 25, 32, 40, 50])[:channels]
+        self.geomgroup = np.array([1, 0, 0, 0, 0, 0], dtype=np.uint8)
+        self.max_range = 9.0
+        self.rng = np.random.default_rng(19)
+        self.slice_index = 0
+        self.scan_start = None
+        self.points: list[tuple[float, float, float, float]] = []
+        base_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "base_link")
+        self.robot_bodies = set()
+        for body_id in range(model.nbody):
+            parent = body_id
+            while parent > 0 and parent != base_id:
+                parent = int(model.body_parentid[parent])
+            if parent == base_id:
+                self.robot_bodies.add(body_id)
+
+    def reset(self):
+        self.slice_index = 0
+        self.scan_start = None
+        self.points.clear()
+
+    def capture_step(self, stamp: float):
+        if self.scan_start is None:
+            self.scan_start = stamp
+        origin = self.data.site_xpos[self.site_id].copy()
+        rotation = self.data.site_xmat[self.site_id].reshape(3, 3).copy()
+        geom_id_out = np.zeros(1, dtype=np.int32)
+        begin = self.slice_index * self.azimuth_slices / (self.azimuth_slices // self.azimuths_per_step)
+        for az_index in range(self.azimuths_per_step):
+            azimuth = 2.0 * math.pi * (begin + az_index) / self.azimuth_slices
+            for ring, elevation in enumerate(self.elevations):
+                ce = math.cos(elevation)
+                direction_local = np.array([ce * math.cos(azimuth), ce * math.sin(azimuth), math.sin(elevation)])
+                direction_world = rotation @ direction_local
+                ray_origin = origin.copy()
+                traveled = 0.0
+                while traveled < self.max_range:
+                    distance = self.mujoco.mj_ray(
+                        self.model, self.data, ray_origin, direction_world,
+                        self.geomgroup, 1, -1, geom_id_out)
+                    if distance < 0.0:
+                        break
+                    traveled += distance
+                    geom_id = int(geom_id_out[0])
+                    body_id = int(self.model.geom_bodyid[geom_id])
+                    if body_id not in self.robot_bodies:
+                        break
+                    advance = distance + 0.012
+                    ray_origin = ray_origin + direction_world * advance
+                    traveled += 0.012
+                if distance < 0.12 or traveled >= self.max_range:
+                    continue
+                noisy_distance = traveled + self.rng.normal(0.0, 0.004)
+                local_point = direction_local * noisy_distance
+                point_time = stamp - self.scan_start
+                self.points.append((local_point[0], local_point[1], local_point[2], point_time))
+        self.slice_index += self.azimuths_per_step
+        if self.slice_index < self.azimuth_slices:
+            return None
+        result = (self.scan_start, np.asarray(self.points, dtype=np.float64), stamp)
+        self.slice_index = 0
+        self.scan_start = None
+        self.points = []
+        return result
+
+
+class GLIMLocalizer:
+    """Online range-inertial estimator backed by scan-built submaps."""
+
+    def __init__(self, spawn: tuple[float, float], yaw: float = 0.0):
         self.pose = np.array([spawn[0], spawn[1], yaw], dtype=np.float64)
         self.predicted = self.pose.copy()
         self.velocity = np.zeros(2, dtype=np.float64)
@@ -227,6 +566,8 @@ class GLIMLocalizer:
         self.last_scan = np.zeros((0, 2))
         self.scan_count = 0
         self.last_good_pose = self.pose.copy()
+        self.yaw_observability = 0.0
+        self.mapper = OnlineSubmapMapper()
 
     def reset(self, spawn: tuple[float, float], yaw: float = 0.0) -> None:
         self.pose[:] = [spawn[0], spawn[1], yaw]
@@ -242,6 +583,9 @@ class GLIMLocalizer:
         self.trajectory = [(float(spawn[0]), float(spawn[1]))]
         self.last_scan = np.zeros((0, 2))
         self.last_good_pose = self.pose.copy()
+        self.yaw_observability = 0.0
+        self.mapper.reset()
+        self.scan_count = 0
 
     def predict(self, dt: float, v_body: np.ndarray, yaw_rate: float) -> None:
         """IMU + leg-odometry factor."""
@@ -262,19 +606,17 @@ class GLIMLocalizer:
         if len(scan_local) > 240:
             scan_local = scan_local[::2]
         if len(scan_local) >= 30:
-            init = self._local_search(scan_local, self.pose)
-            solved, inliers, rmse = self._icp(scan_local, init)
+            solved, inliers, rmse, accepted = self.mapper.track(
+                scan_local, self.pose, self.scan_count * 0.1)
+            self.scan_count += 1
             correction = float(np.hypot(*(solved[:2] - self.pose[:2])))
-            if inliers >= 25 and rmse < 0.20 and correction < 0.28:
-                # Yaw is carried by the IMU/gyro factor.  The range factor
-                # only corrects x/y; this avoids symmetric-corridor flips.
-                solved[2] = self.pose[2]
+            if accepted:
                 self.pose = solved
                 self.last_good_pose = self.pose.copy()
                 self.inliers = inliers
                 self.rmse = rmse
                 self.correction = correction
-                self.status = "TRACKING" if (inliers >= 60 and rmse < 0.105) else "DEGRADED"
+                self.status = "TRACKING" if (inliers >= 35 and rmse < 0.12) else "DEGRADED"
                 self.lost_since = None
             else:
                 self.inliers = inliers
@@ -285,6 +627,9 @@ class GLIMLocalizer:
                     self.lost_since = time.perf_counter()
                 elif time.perf_counter() - self.lost_since > 3.0:
                     self.status = "LOST"
+            if self.mapper.loop_closures and len(self.mapper.poses) > 1:
+                # Rebuild the displayed path from optimized keyframe states.
+                self.trajectory = [(float(p[0]), float(p[1])) for p in self.mapper.poses]
         self.last_scan_time = time.perf_counter()
         self.latency_ms = (self.last_scan_time - t0) * 1000.0
         if not self.trajectory or math.hypot(self.pose[0] - self.trajectory[-1][0], self.pose[1] - self.trajectory[-1][1]) > 0.12:
@@ -300,147 +645,36 @@ class GLIMLocalizer:
             scan_local=scan_local, trajectory=self.trajectory[-240:],
         )
 
-    def _local_search(self, scan: np.ndarray, pose: np.ndarray) -> np.ndarray:
-        """Coarse correlative search around the prediction.
-
-        This is the same idea as a small branch-and-bound range factor: it
-        escapes the point-to-line local minima that occur in a rectangular
-        arena with repetitive walls.
-        """
-        sub = scan[:: max(1, len(scan) // 70)][:80]
-        x0, y0 = self.prior.bounds[0], self.prior.bounds[2]
-        res = self.prior.grid_res
-        field = self.prior.distance_field
-        nx, ny = field.shape
-        best = (-1.0, pose.copy())
-        for dyaw in (-0.14, -0.07, 0.0, 0.07, 0.14):
-            yaw = pose[2] + dyaw
-            c, s = math.cos(yaw), math.sin(yaw)
-            rot = np.array([[c, -s], [s, c]])
-            local = sub @ rot.T
-            for dx in (-0.32, -0.16, 0.0, 0.16, 0.32):
-                for dy in (-0.32, -0.16, 0.0, 0.16, 0.32):
-                    pts = local + np.array([pose[0] + dx, pose[1] + dy])
-                    ij = np.round((pts - np.array([x0, y0])) / res).astype(int)
-                    if np.any(ij[:, 0] < 0) or np.any(ij[:, 0] >= nx) or np.any(ij[:, 1] < 0) or np.any(ij[:, 1] >= ny):
-                        continue
-                    dist = field[ij[:, 0], ij[:, 1]]
-                    score = float(np.mean(np.exp(-(dist / 0.10) ** 2)))
-                    if score > best[0]:
-                        best = (score, np.array([pose[0] + dx, pose[1] + dy, yaw]))
-        if best[0] < 0.18:
-            return pose.copy()
-        return best[1]
-
-    def _icp(self, scan: np.ndarray, init: np.ndarray, iterations: int = 8):
-        pose = init.copy()
-        points, normals = self.prior.points, self.prior.normals
-        if len(points) == 0:
-            return pose, 0, 1.0
-        best_inliers, best_rmse = 0, 1.0
-        for _ in range(iterations):
-            c, s = math.cos(pose[2]), math.sin(pose[2])
-            rot = np.array([[c, -s], [s, c]])
-            world = scan @ rot.T + pose[:2]
-            dist, idx = self.prior.tree.query(world, k=1)
-            mask = dist < 0.50
-            if mask.sum() < 10:
-                break
-            p = world[mask]
-            q = points[idx[mask]]
-            n = normals[idx[mask]]
-            # Point-to-line residual and analytic Jacobian.
-            diff = p - q
-            r = np.einsum("ij,ij->i", n, diff)
-            px, py = scan[mask, 0], scan[mask, 1]
-            jx = n[:, 0]
-            jy = n[:, 1]
-            jt = n[:, 0] * (-s * px - c * py) + n[:, 1] * (c * px - s * py)
-            J = np.stack([jx, jy, jt], axis=1)
-            # Robust Cauchy weights and a hard gate.
-            scale = 0.09
-            w = 1.0 / (1.0 + (r / scale) ** 2)
-            w *= np.clip(1.0 - (dist[mask] - 0.35) / 0.15, 0.0, 1.0)
-            H = J.T @ (J * w[:, None])
-            g = J.T @ (r * w)
-            H += np.diag([1e-3, 1e-3, 2e-3])
-            try:
-                delta = -np.linalg.solve(H, g)
-            except np.linalg.LinAlgError:
-                break
-            if not np.all(np.isfinite(delta)):
-                break
-            delta[:2] = np.clip(delta[:2], -0.18, 0.18)
-            delta[2] = np.clip(delta[2], -0.10, 0.10)
-            pose[:2] += delta[:2]
-            pose[2] = (pose[2] + delta[2] + math.pi) % (2 * math.pi) - math.pi
-            inl = int(mask.sum())
-            rmse = float(np.sqrt(np.mean(r ** 2)))
-            if inl > best_inliers:
-                best_inliers, best_rmse = inl, rmse
-            if abs(delta[0]) + abs(delta[1]) + abs(delta[2]) < 1e-4:
-                break
-        return pose, best_inliers, best_rmse
-
     def restore_last_good(self) -> None:
         """Fall back to the last accepted scan pose before a global retry."""
         self.pose = self.last_good_pose.copy()
         self.status = "DEGRADED"
 
     def relocalize(self, scan_local: np.ndarray) -> bool:
-        """Coarse global branch search followed by local ICP."""
-        if len(scan_local) < 25:
+        """Relocalize against the accumulated scan map, never the simulator map."""
+        if len(scan_local) < 25 or not self.mapper.poses:
             return False
         t0 = time.perf_counter()
         self.status = "RELOCALIZING"
-        step = max(1, len(scan_local) // 60)
-        sub = scan_local[::step]
-        x0, x1, y0, y1 = self.prior.bounds
-        res = 0.40
-        xs = np.arange(x0 + 0.4, x1 - 0.4, res)
-        ys = np.arange(y0 + 0.4, y1 - 0.4, res)
-        best = []
-        for k in range(24):
-            yaw = -math.pi + k * 2 * math.pi / 24
-            c, s = math.cos(yaw), math.sin(yaw)
-            rot = np.array([[c, -s], [s, c]])
-            local = sub @ rot.T
-            for x in xs:
-                for y in ys:
-                    pts = local + (x, y)
-                    ij = np.round((pts - np.array([x0, y0])) / self.prior.grid_res).astype(int)
-                    ij[:, 0] = np.clip(ij[:, 0], 0, self.prior.distance_field.shape[0] - 1)
-                    ij[:, 1] = np.clip(ij[:, 1], 0, self.prior.distance_field.shape[1] - 1)
-                    d = self.prior.distance_field[ij[:, 0], ij[:, 1]]
-                    score = float(np.mean(d < 0.22))
-                    if score > 0.35:
-                        best.append((score, x, y, yaw, float(np.mean(d))))
-        best.sort(reverse=True)
-        chosen = None
         prev = self.pose.copy()
-        for score, x, y, yaw, _ in best[:10]:
-            dx, dy = x - prev[0], y - prev[1]
-            dyaw = abs((yaw - prev[2] + math.pi) % (2 * math.pi) - math.pi)
-            # Prefer the hypothesis that continues the current track.  A
-            # symmetric arena can otherwise look identical 180 deg away.
-            if math.hypot(dx, dy) > 2.2 or dyaw > 0.75:
-                continue
-            solved, inl, rmse = self._icp(scan_local, np.array([x, y, yaw]), iterations=14)
-            if inl < 35 or rmse > 0.11:
-                continue
-            jump = math.hypot(solved[0] - prev[0], solved[1] - prev[1])
-            if jump > 2.2:
-                continue
-            if chosen is None or (inl - 20 * rmse) > (chosen[1] - 20 * chosen[2]):
-                chosen = (solved, inl, rmse)
-        if chosen is None:
+        candidates = sorted(range(len(self.mapper.poses)),
+                            key=lambda i: np.linalg.norm(self.mapper.poses[i][:2] - prev[:2]))
+        solved, inl, rmse = prev, 0, 1.0
+        for i in candidates[:12]:
+            target = self.mapper._target(self.mapper.poses[i], radius=2.5)
+            candidate, count, error = self.mapper._align(scan_local, self.mapper.poses[i], target, 12)
+            if count > inl or (count == inl and error < rmse):
+                solved, inl, rmse = candidate, count, error
+        if inl < 30 or rmse >= 0.16 or np.linalg.norm(solved[:2] - prev[:2]) > 3.0:
             self.status = "LOST"
             return False
-        self.pose = chosen[0]
-        self.inliers = chosen[1]
-        self.rmse = chosen[2]
-        self.status = "TRACKING" if (chosen[1] >= 60 and chosen[2] < 0.105) else "DEGRADED"
+        self.pose = solved
+        self.predicted = self.pose.copy()
+        self.last_good_pose = self.pose.copy()
+        self.inliers = inl
+        self.rmse = rmse
+        self.status = "TRACKING" if (inl >= 35 and rmse < 0.12) else "DEGRADED"
         self.lost_since = None
-        self.trajectory = [(float(self.pose[0]), float(self.pose[1]))]
+        self.trajectory = [(float(p[0]), float(p[1])) for p in self.mapper.poses]
         self.latency_ms = (time.perf_counter() - t0) * 1000.0
-        return chosen[1] >= 45 and chosen[2] < 0.10
+        return inl >= 30 and rmse < 0.16

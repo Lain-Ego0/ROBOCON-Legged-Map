@@ -78,8 +78,8 @@
           <div class="hud-row"><span class="dot" id="locDot"></span><b id="hudLoc">TRACKING</b><em id="hudLocHz">10 Hz</em></div>
           <div class="mini-metrics">
             <div><span>位置误差</span><b id="hudErr">--</b></div>
-            <div><span>内点</span><b id="hudInlier">--</b></div>
-            <div><span>RMSE</span><b id="hudRmse">--</b></div>
+            <div><span>已处理扫描</span><b id="hudInlier">--</b></div>
+            <div><span>队列丢帧</span><b id="hudRmse">--</b></div>
           </div>
           <div class="hud-bar"><i id="inlierBar"></i></div>
         </div>
@@ -120,9 +120,14 @@
       <section class="card map-card">
         <div class="card-head">
           <h2>场地态势</h2>
-          <div class="map-tabs"><button class="on" data-view="task">任务区</button><button data-view="full">全场</button></div>
+          <div class="map-tools">
+            <button id="btnLayoutEdit" title="拖动小地图中的物块调整位置">编辑物资</button>
+            <button id="btnLayoutConfirm" hidden>确认布置</button>
+            <div class="map-tabs"><button class="on" data-view="task">任务区</button><button data-view="full">全场</button></div>
+          </div>
         </div>
         <div class="minimap-box"><canvas id="minimap"></canvas><div class="map-overlay" id="mapLabel">TASK FIELD</div></div>
+        <div class="layout-hint" id="layoutHint" hidden>拖动物块布置 · 靠近红色存放位自动吸附</div>
         <div class="map-legend">
           <span><i class="sw robot"></i>机器人</span><span><i class="sw path"></i>规划路径</span>
           <span><i class="sw scan"></i>LiDAR</span><span><i class="sw zone"></i>归位区</span>
@@ -135,12 +140,12 @@
       </section>
 
       <section class="card telemetry-card">
-        <div class="card-head"><h2>估算器</h2><span class="tag">GLIM</span></div>
+        <div class="card-head"><h2>GLIM 3D SLAM</h2><span class="tag">CUDA / VGICP</span></div>
         <div class="kv"><span>估计位姿</span><b id="kvEst">--</b></div>
         <div class="kv"><span>真值位姿</span><b id="kvGt">--</b></div>
         <div class="kv"><span>偏航误差</span><b id="kvYawErr">--</b></div>
-        <div class="kv"><span>扫描匹配修正</span><b id="kvCorr">--</b></div>
-        <div class="kv"><span>解算耗时</span><b id="kvLatency">--</b></div>
+        <div class="kv"><span>处理扫描 / 丢帧</span><b id="kvCorr">--</b></div>
+        <div class="kv"><span>位姿数据延迟</span><b id="kvLatency">--</b></div>
         <div class="scan-chart"><canvas id="scanChart"></canvas></div>
       </section>
 

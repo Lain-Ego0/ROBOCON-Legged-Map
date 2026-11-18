@@ -245,16 +245,16 @@
     <!-- 各归位区净距 600mm，中心间隔 900mm；中心 x=12.85 -->
     <geom name="extra_home_green" type="box"
           pos="12.85 -1.35 0.002" size="0.15 0.15 0.001"
-          rgba="1 0 0 1" contype="0" conaffinity="0"/>
+          rgba="0 1 0 1" contype="0" conaffinity="0"/>
     <geom name="extra_home_gray" type="box"
           pos="12.85 -0.45 0.002" size="0.15 0.15 0.001"
-          rgba="0 0 1 1" contype="0" conaffinity="0"/>
+          rgba="0.5 0.5 0.5 1" contype="0" conaffinity="0"/>
     <geom name="extra_home_blue" type="box"
           pos="12.85  0.45 0.002" size="0.15 0.15 0.001"
-          rgba="0.5 0.5 0.5 1" contype="0" conaffinity="0"/>
+          rgba="0 0 1 1" contype="0" conaffinity="0"/>
     <geom name="extra_home_red" type="box"
           pos="12.85  1.35 0.002" size="0.15 0.15 0.001"
-          rgba="0 1 0 1" contype="0" conaffinity="0"/>
+          rgba="1 0 0 1" contype="0" conaffinity="0"/>
 
     <!-- 附加区域地面：6000mm × 4000mm，黄色，顶面 z=0 -->
 
@@ -1434,6 +1434,7 @@
     <geom name="wood_0920_0945" type="box" pos="-5.7550 1.4195 0.0671" size="0.0300 0.0300 0.0671" rgba="0.5 0.4 0.3 1"/>
 
     <body name="base_link" pos="0 0 0.4">
+      <site name="imu_lidar_site" pos="0 0 0.085" size="0.008" rgba="0 0 0 0"/>
       <inertial pos="0.014478 0.0001355 -0.0027127"
                 mass="4.2719"
                 fullinertia="0.01292039 0.03772913 0.04632371 -8.164E-05 -0.00033706 -1.848E-05"/>
@@ -1608,4 +1609,5 @@
     <motor name="RR_thigh"  joint="RR_thigh_joint"/>
     <motor name="RR_calf"   joint="RR_calf_joint"/>
   </actuator>
+<sensor><accelerometer name="imu_accel" site="imu_lidar_site"/><gyro name="imu_gyro" site="imu_lidar_site"/></sensor>
 </mujoco>

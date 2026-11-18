@@ -146,8 +146,11 @@ class OccupancyGrid:
                         return ni, nj
         return i, j
 
-    def plan(self, start, goal, cargo_obstacles=(), clear_start=True, clear_goal=True) -> PathPlan:
+    def plan(self, start, goal, cargo_obstacles=(), clear_start=True, clear_goal=True,
+             extra_clearance: int = 0) -> PathPlan:
         grid = self.static.copy()
+        for _ in range(max(0, int(extra_clearance))):
+            grid = self._inflate(grid)
         for (x, y, radius) in cargo_obstacles:
             r = max(1, int(math.ceil(radius / self.res)))
             ci, cj = self.to_cell(x, y)
@@ -264,16 +267,28 @@ class PathFollower:
     def __init__(self):
         self.plan: PathPlan | None = None
         self.index = 0
+        self._window_time = 0.0
+        self._window_distance = 0.0
+        self._window_remain = None
+        self.stuck = False
 
     def set(self, plan: PathPlan):
         self.plan = plan
         self.index = 1 if len(plan.points) > 1 else 0
+        self.reset_progress()
+
+    def reset_progress(self):
+        self._window_time = 0.0
+        self._window_distance = 0.0
+        self._window_remain = None
+        self._last_position = None
+        self.stuck = False
 
     def clear(self):
         self.plan = None
         self.index = 0
 
-    def command(self, pose, lookahead=0.75, speed=0.62, fine_distance=0.55):
+    def command(self, pose, lookahead=0.75, speed=0.62, fine_distance=0.55, dt=0.02):
         if self.plan is None or not self.plan.points:
             return np.zeros(3, dtype=np.float32), None, 0.0
         pts = self.plan.points
@@ -317,6 +332,23 @@ class PathFollower:
             v = 0.08
         wz = float(np.clip(1.9 * err, -1.18, 1.18))
         vy_cmd = float(np.clip(-0.75 * lat_body, -0.30, 0.30)) * (1.0 if remain > 0.5 else 0.0)
+        position = np.array([x, y], dtype=np.float64)
+        if self._last_position is not None:
+            self._window_distance += float(np.linalg.norm(position - self._last_position))
+        self._last_position = position
+        if abs(err) < 0.9 and remain > max(0.65, fine_distance) and v > 0.20:
+            if self._window_remain is None:
+                self._window_remain = remain
+            self._window_time += dt
+            if self._window_time >= 1.6:
+                progress = self._window_remain - remain
+                self.stuck = self._window_distance < 0.12 and progress < 0.10
+                self._window_time = 0.0
+                self._window_distance = 0.0
+                self._window_remain = remain
+        else:
+            self.reset_progress()
+            self._last_position = position
         return np.array([v, vy_cmd, wz], dtype=np.float32), target, remain
 
     @property

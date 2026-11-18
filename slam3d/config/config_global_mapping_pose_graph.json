@@ -1,0 +1,23 @@
+{
+  "global_mapping": {
+    "enable_optimization": true,
+    "registration_type": "VGICP",
+    "min_travel_dist": 4.0,
+    "max_neighbor_dist": 4.0,
+    "min_inliear_fraction": 0.45,
+    "subsample_target": 5000,
+    "subsample_rate": 0.2,
+    "gicp_max_correspondence_dist": 1.5,
+    "vgicp_voxel_resolution": 0.4,
+    "odom_factor_stddev": 0.03,
+    "loop_factor_stddev": 0.1,
+    "loop_factor_robust_width": 1.0,
+    "loop_candidate_buffer_size": 32,
+    "loop_candidate_eval_per_thread": 1,
+    "use_isam2_dogleg": false,
+    "isam2_relinearize_skip": 1,
+    "isam2_relinearize_thresh": 0.1,
+    "init_pose_damping_scale": 1000000.0,
+    "num_threads": 2
+  }
+}

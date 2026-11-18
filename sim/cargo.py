@@ -102,6 +102,14 @@ class CargoManager:
             self.data.qvel[c.dof_adr:c.dof_adr + 6] = 0.0
         self.mujoco.mj_forward(self.model, self.data)
 
+    def set_layout(self, positions: list[tuple[float, float]]) -> None:
+        """Apply a confirmed pre-mission layout while preserving box classes."""
+        if len(positions) != len(self.cargo):
+            raise ValueError("layout must contain one position per cargo box")
+        for cargo, (x, y) in zip(self.cargo, positions):
+            cargo.initial = (float(x), float(y), 0.101)
+        self.reset()
+
     def _collision(self, c: Cargo, enabled: bool) -> None:
         self.model.geom_contype[c.geom_id] = 4 if enabled else 0
         self.model.geom_conaffinity[c.geom_id] = 4 if enabled else 0
@@ -168,13 +176,27 @@ class CargoManager:
                 out.append(c)
         return out
 
-    def deposit(self, category: str) -> list[Cargo]:
-        """Place all carried boxes of ``category`` into its home cell."""
+    def touching_home_side(self, category: str, side: int, base_pos: np.ndarray, yaw: float) -> bool:
+        """Whether the carried box on one flank overlaps its matching home cell."""
+        cx, cy = HOME[category]
+        off_y = side * 0.34
+        box_x = base_pos[0] - math.sin(yaw) * off_y
+        box_y = base_pos[1] + math.cos(yaw) * off_y
+        # SAT for the rotated 0.2 m cargo square against the 0.3 m home square.
+        dx, dy = box_x - cx, box_y - cy
+        c, s = math.cos(yaw), math.sin(yaw)
+        home_radius = 0.15 * (abs(c) + abs(s))
+        return (abs(dx) <= 0.25 and abs(dy) <= 0.25
+                and abs(dx * c + dy * s) <= 0.1 + home_radius
+                and abs(-dx * s + dy * c) <= 0.1 + home_radius)
+
+    def deposit(self, category: str, side: int | None = None) -> list[Cargo]:
+        """Place carried boxes of ``category`` (optionally one flank) into its home cell."""
         cx, cy = HOME[category]
         existing = [c for c in self.zone_occupants(category) if self.position(c)[2] < 0.22]
         level = 0 if not existing else len(existing)
         out = []
-        for cargo in [c for c in self.cargo if c.side != 0 and c.category == category]:
+        for cargo in [c for c in self.cargo if c.side != 0 and c.category == category and (side is None or c.side == side)]:
             self._collision(cargo, True)
             cargo.side = 0
             z = 0.101 + 0.20 * level

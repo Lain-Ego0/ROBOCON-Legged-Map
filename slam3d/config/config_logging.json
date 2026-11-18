@@ -1,0 +1,9 @@
+{
+  "logging": {
+    "log_dir": "/tmp/robocon-glim",
+    "save_logs": false,
+    "rotate_logs": true,
+    "max_file_size_kb": 2048,
+    "max_files": 2
+  }
+}

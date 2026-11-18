@@ -184,16 +184,16 @@
     <!-- 各归位区净距 600mm，中心间隔 900mm；中心 x=12.85 -->
     <geom name="extra_home_green" type="box"
           pos="12.85 -1.35 0.002" size="0.15 0.15 0.001"
-          rgba="1 0 0 1" contype="0" conaffinity="0"/>
+          rgba="0 1 0 1" contype="0" conaffinity="0"/>
     <geom name="extra_home_gray" type="box"
           pos="12.85 -0.45 0.002" size="0.15 0.15 0.001"
-          rgba="0 0 1 1" contype="0" conaffinity="0"/>
+          rgba="0.5 0.5 0.5 1" contype="0" conaffinity="0"/>
     <geom name="extra_home_blue" type="box"
           pos="12.85  0.45 0.002" size="0.15 0.15 0.001"
-          rgba="0.5 0.5 0.5 1" contype="0" conaffinity="0"/>
+          rgba="0 0 1 1" contype="0" conaffinity="0"/>
     <geom name="extra_home_red" type="box"
           pos="12.85  1.35 0.002" size="0.15 0.15 0.001"
-          rgba="0 1 0 1" contype="0" conaffinity="0"/>
+          rgba="1 0 0 1" contype="0" conaffinity="0"/>
 
     <!-- 附加区域地面：6000mm × 4000mm，黄色，顶面 z=0 -->
 

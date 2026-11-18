@@ -1,25 +1,28 @@
 # 环境搭建与运行复现
 
-本文记录当前代码在本机上的构建和运行方法。仿真、GLIM 和 CUDA 分属不同运行环境：MuJoCo/Web 服务使用带有 Python MuJoCo 与 PyTorch 的环境，GLIM 原生程序使用带 CUDA 开发依赖的构建环境。两者通过子进程标准输入输出传递传感器数据和位姿，不需要 ROS。
+本文记录从克隆仓库到运行仿真的环境准备方法。Python 依赖由 `pyproject.toml` 和 `uv.lock` 固定；CUDA 驱动、Toolkit 及 GLIM C++ 依赖属于系统原生环境，不由 Python 锁文件管理。仿真和 GLIM 通过子进程标准输入输出传递传感器数据和位姿，不需要 ROS。
 
 ## 1. 目录与依赖
 
-克隆项目后进入仓库根目录执行以下命令。仿真环境需要 Python 3、MuJoCo、PyTorch、NumPy、SciPy 和 Pillow。可以使用系统 Python，也可以建立虚拟环境并安装这些 Python 包。若解释器不在 `PATH` 中，通过 `SIM_PYTHON` 指定它：
+克隆项目后进入仓库根目录，运行一键配置脚本。若系统中没有 `uv`，脚本会将其安装到当前用户目录：
 
 ```bash
-SIM_PYTHON="$(command -v python3)" ./run_sim.sh --port 8731 --no-open
+./scripts/setup_env.sh
 ```
 
-若从零准备 Python 环境，可以在仓库根目录执行：
+脚本使用 `.python-version` 选择 Python 3.12，并按 `uv.lock` 安装仿真依赖。Linux 上的策略模型固定使用 CPU 版 PyTorch，这能避免为策略推理下载并安装另一套 CUDA 运行时；GLIM 是否使用 GPU 是独立的原生构建选项。完整模式还会检查 CUDA Toolkit 与 GLIM 源码，构建当前仓库集成的 CUDA 后端并运行动态库检查。它不会使用系统包管理器安装 CUDA、驱动或 C++ 库；这些依赖尚未安装时，脚本会列出缺项并退出。只需要 Python 环境时运行：
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install mujoco torch numpy scipy Pillow
+./scripts/setup_env.sh --python-only
 ```
 
-策略推理需要可用的 PyTorch；若要用 GPU 推理，应按本机驱动与 CUDA 版本选择对应的 PyTorch 安装方式。随后运行 `SIM_PYTHON=.venv/bin/python ./run_sim.sh --no-open`。
+随后启动仿真：
+
+```bash
+uv run python -m sim.app --port 8731 --no-open
+```
+
+PyTorch 可在没有 CUDA 的机器上执行 CPU 推理；GLIM 的 3D 定位需要可用的 NVIDIA GPU、驱动和 CUDA 原生依赖。若 `uv.lock` 有意更新，应使用 `uv lock` 生成并提交新的锁文件；复现环境时配置脚本使用 `uv sync --locked`，检测到清单与锁文件不一致会停止。
 
 还需要 NVIDIA 驱动、CUDA Toolkit、`nvcc`、CMake，以及 GLIM 所需的 CUDA 版 `gtsam_points`、GTSAM、Eigen3、Boost serialization、OpenMP 和 spdlog。依赖版本与安装步骤请遵循 [GLIM 上游说明](https://github.com/koide3/glim) 和 [gtsam_points 上游说明](https://github.com/koide3/gtsam_points)。当前构建脚本按 CUDA 架构 8.9 配置，适用于 RTX 4090；其他 GPU 应先检查并调整 `slam3d/build_glim.sh` 中的 `CMAKE_CUDA_ARCHITECTURES`。
 
@@ -87,7 +90,7 @@ GLIM core and GPU odometry plugin loaded successfully
 ## 4. 启动仿真
 
 ```bash
-./run_sim.sh --port 8731 --no-open
+uv run python -m sim.app --port 8731 --no-open
 ```
 
 浏览器打开 <http://127.0.0.1:8731/>。如端口被占用，换用空闲端口。启动日志出现 `simulator ready` 表示 HTTP 服务已启动，但不代表 GLIM 已经给出定位结果。应用会在任务启动前持续采集传感器数据并初始化估计器。
@@ -105,7 +108,7 @@ GLIM core and GPU odometry plugin loaded successfully
 任务赛须先在小地图编辑并确认物资布置，再启动任务。验收自主导航时，等 `glim_valid` 为真后再开始；如果位姿超时，机器人停车是预期的安全行为。可以用 `/api/mission` 的 `reset` 动作验证任务和 GLIM 重启：
 
 ```bash
-python - <<'PY'
+uv run python - <<'PY'
 import json
 from urllib.request import Request, urlopen
 
@@ -132,7 +135,7 @@ ps -eo pid,ppid,cmd | grep -E 'sim\.app|mujoco_glim_bridge' | grep -v grep
 回放使用 MuJoCo Python 环境生成传感器数据，并将数据送入原生 GLIM：
 
 ```bash
-python slam3d/replay_mujoco.py --duration 24
+uv run python slam3d/replay_mujoco.py --duration 24
 ```
 
 该脚本会比实时速度更快地推进仿真，适合检查点云/IMU 数据格式、GLIM 输出和估计误差，不是实时吞吐验收。若加速回放报告丢帧，不应据此直接判断实时应用同样会丢帧；实时运行应观察 `/api/state` 中处理数、丢帧数和位姿年龄。
@@ -165,7 +168,7 @@ python slam3d/replay_mujoco.py --duration 24
 ## 其他检查
 
 ```bash
-python -m compileall -q sim slam3d
+uv run python -m compileall -q sim slam3d
 node --check sim/web/app.js
 git diff --check
 ```

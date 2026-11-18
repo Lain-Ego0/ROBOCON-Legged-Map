@@ -1,7 +1,7 @@
 """ROBOCON 2027 S-Dog obstacle / logistics simulator web application.
 
 Run:
-    /home/zero/Documents/sdog_rl_lab/.venv/bin/python -m sim.app --port 8731
+    python -m sim.app --port 8731
 """
 from __future__ import annotations
 
@@ -32,7 +32,8 @@ from .config import (
     OBSTACLE_ROUTE, POLICY, PORT, SCENE, START_LOGISTICS, START_MANUAL,
     START_OBSTACLE, STORAGE, TREE, WEB,
 )
-from .localization import GLIMLocalizer, LidarScanner, PriorMap
+from .glim_bridge import GLIMBridge
+from .localization import GLIMLocalizer, LidarScanner, LidarScanner3D
 from .minimap import render as render_map
 from .mission import MissionController, RuleScoring
 from .planning import OccupancyGrid, PathFollower, PathPlan
@@ -78,6 +79,9 @@ class SimState:
         self.orbit_elevation = -28.0
         self.orbit_distance = 6.0
         self.reset_requested = False
+        self.layout_requested: list[tuple[float, float]] | None = None
+        self.layout_confirmed = False
+        self.layout_applied = threading.Event()
         self.relocalize_requested = False
         self.pending_mode: str | None = None
         self.keys: set[str] = set()
@@ -98,21 +102,22 @@ class ObstacleTour:
         self.follower = PathFollower()
         self.score = 0
         self.logs = []
+        self.replans = 0
+        self.plan_failed = False
         self.started = False
         self.finished = False
         self.elapsed = 0.0
         self.start = tuple(start)
         self._plan_next((start[0], start[1]))
 
-    def _plan_next(self, pose):
+    def _plan_next(self, pose, extra_clearance=0):
         if self.index >= len(self.points):
             self.finished = True
             self.follower.clear()
             return
         goal = self.points[self.index]
-        plan = self.grid.plan(pose, goal)
-        if not plan.ok:
-            plan = PathPlan([tuple(pose), goal], math.hypot(goal[0] - pose[0], goal[1] - pose[1]))
+        plan = self.grid.plan(pose, goal, extra_clearance=extra_clearance)
+        self.plan_failed = not plan.ok
         self.follower.set(plan)
 
     def start_tour(self):
@@ -133,7 +138,21 @@ class ObstacleTour:
             self.follower.clear()
             self.log("越障航线结束 · 180 s", "end")
             return np.zeros(3, dtype=np.float32)
-        cmd, target, remain = self.follower.command(pose, lookahead=0.7, speed=0.55, fine_distance=0.4)
+        if self.plan_failed:
+            self.finished = True
+            self.log(f"無可行路徑 · {self.labels[self.index]}，停止航線", "warn")
+            return np.zeros(3, dtype=np.float32)
+        cmd, target, remain = self.follower.command(
+            pose, lookahead=0.58, speed=0.43, fine_distance=0.4, dt=dt)
+        if self.follower.stuck:
+            if self.replans >= 2:
+                self.finished = True
+                self.log(f"路徑停滯且重規劃失敗 · {self.labels[self.index]}", "warn")
+                return np.zeros(3, dtype=np.float32)
+            self.replans += 1
+            self._plan_next(pose[:2], extra_clearance=self.replans)
+            self.log(f"路徑停滯 · 擴大障礙間距並重規劃 {self.replans}/2", "warn")
+            return np.zeros(3, dtype=np.float32)
         goal = self.points[self.index]
         if remain < OBSTACLE_CHECKPOINT_RADIUS:
             self.reached[self.index] = True
@@ -141,6 +160,7 @@ class ObstacleTour:
                 self.score += self.scores[self.index]
             self.log(f"通过检查点 · {self.labels[self.index]} +{self.scores[self.index]}", "score")
             self.index += 1
+            self.replans = 0
             if self.index >= len(self.points):
                 self.finished = True
                 self.follower.clear()
@@ -172,7 +192,7 @@ class Simulator(threading.Thread):
         self.args = args
         self.mode = "logistics"
         self.started = False
-        self.auto_start_at = time.monotonic() + 2.2 if not args.no_autostart else None
+        self.auto_start_at = None
         self.map_png = b""
         self.last_telemetry = 0.0
         self.last_scan = -1.0
@@ -180,7 +200,6 @@ class Simulator(threading.Thread):
         self.last_snapshot = 0.0
         self.scan_clock = 0.0
         self._last_command = np.zeros(3, dtype=np.float32)
-        self.last_reloc_attempt = -10.0
         self.last_reloc_attempt = -10.0
         self.lost_handled = False
         self.distance = 0.0
@@ -204,11 +223,23 @@ class Simulator(threading.Thread):
         self.robot = SdogPolicy(model, self.data, POLICY)
         self.cargo = CargoManager(model, self.data)
         self.grid = OccupancyGrid(model, self.data)
-        self.prior = PriorMap(model, self.data)
         self.lidar = LidarScanner(model, self.data)
+        self.lidar3d = LidarScanner3D(model, self.data)
+        self.imu_accel_adr, self.imu_gyro_adr = self._sensor_addresses(model)
         self.scoring = RuleScoring()
         self.mission = MissionController(self.cargo, self.grid, self.scoring, START_LOGISTICS[:2])
-        self.localizer = GLIMLocalizer(self.prior, START_LOGISTICS[:2], 0.0)
+        self.localizer = GLIMLocalizer(START_LOGISTICS[:2], 0.0)
+        root = pathlib.Path(__file__).resolve().parents[1]
+        self.glim_bridge = GLIMBridge(
+            root / "build/glim-runtime/mujoco_glim_bridge",
+            root / "slam3d/config",
+            root / "build/glim-runtime",
+        )
+        self.glim_pose = None
+        self.glim_stamp = None
+        self.glim_alignment = None
+        self.glim_generation = self.glim_bridge.generation
+        self.imu_pending = []
         self.state.config = self._config()
         self.state.map_png = render_map(model, self.data)
         self.spawn = START_LOGISTICS
@@ -219,7 +250,9 @@ class Simulator(threading.Thread):
     def _config(self):
         return {
             "categories": [{"id": c, "zh": CATEGORY_ZH[c], "color": CATEGORY_COLORS[c]} for c in CATEGORIES],
-            "storage": [{"x": x, "y": y, "category": c} for x, y, c in STORAGE],
+            "storage": [{"x": cargo.initial[0], "y": cargo.initial[1], "category": cargo.category}
+                        for cargo in self.cargo.cargo],
+            "storage_slots": [{"x": x, "y": y} for x, y, _ in STORAGE],
             "home": {c: list(HOME[c]) for c in HOME_ORDER},
             "tree": TREE,
             "modes": {k: {"label": v["label"], "short": v["short"], "description": v["description"]} for k, v in MODES.items()},
@@ -243,6 +276,13 @@ class Simulator(threading.Thread):
         self.distance = 0.0
         self.last_gt = None
         self.last_scan = -1.0
+        self.lidar3d.reset()
+        self.imu_pending.clear()
+        self.glim_pose = None
+        self.glim_stamp = None
+        self.glim_alignment = None
+        if not first and hasattr(self, "glim_bridge"):
+            self.glim_generation = self.glim_bridge.reset()
         self.scan_clock = 0.0
         self._last_command = np.zeros(3, dtype=np.float32)
         self.last_reloc_attempt = -10.0
@@ -250,11 +290,28 @@ class Simulator(threading.Thread):
         self.tour = None
         if self.mode == "obstacle":
             self.tour = ObstacleTour(self.grid, spawn[:2])
-        self.auto_start_at = time.monotonic() + 1.8 if not self.args.no_autostart else None
+        self.auto_start_at = None
         with self.state.lock:
             self.state.error = None
             self.state.render_dirty = True
         self._publish_snapshot()
+
+    @staticmethod
+    def _sensor_addresses(model):
+        acc_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SENSOR, "imu_accel")
+        gyro_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SENSOR, "imu_gyro")
+        if acc_id < 0 or gyro_id < 0:
+            raise ValueError("MuJoCo scene must define imu_accel and imu_gyro sensors")
+        return int(model.sensor_adr[acc_id]), int(model.sensor_adr[gyro_id])
+
+    def _capture_slam_sensors(self):
+        stamp = float(self.data.time)
+        accel = self.data.sensordata[self.imu_accel_adr:self.imu_accel_adr + 3].copy()
+        gyro = self.data.sensordata[self.imu_gyro_adr:self.imu_gyro_adr + 3].copy()
+        self.imu_pending.append((stamp, accel, gyro))
+        scan = self.lidar3d.capture_step(stamp)
+        if scan is not None and self.glim_bridge.submit(self.imu_pending, scan):
+            self.imu_pending = []
 
     def _publish_snapshot(self):
         d = self.data
@@ -288,6 +345,17 @@ class Simulator(threading.Thread):
         try:
             while not self.state.stop.is_set():
                 now = time.perf_counter()
+                if self.state.layout_requested is not None:
+                    with self.state.lock:
+                        layout = self.state.layout_requested
+                        self.state.layout_requested = None
+                    self.cargo.set_layout(layout)
+                    self.state.config = self._config()
+                    self.state.map_png = render_map(self.model, self.data)
+                    with self.state.lock:
+                        self.state.layout_confirmed = True
+                        self.state.layout_applied.set()
+                    self._publish_snapshot()
                 if self.state.reset_requested:
                     with self.state.lock:
                         self.state.reset_requested = False
@@ -318,9 +386,14 @@ class Simulator(threading.Thread):
         finally:
             self.state.stop.set()
             self.state.render_event.set()
+            if hasattr(self, "glim_bridge"):
+                self.glim_bridge.close()
 
     def _tick(self, dt):
         st = self.state
+        glim_age = math.inf if self.glim_stamp is None else max(0.0, float(self.data.time) - self.glim_stamp)
+        glim_valid = self.glim_pose is not None and glim_age <= 0.75
+        navigation_pose = self.glim_pose if glim_valid else self.localizer.pose
         # Automatic mission start only for the logistics demo.
         if self.auto_start_at is not None and time.monotonic() >= self.auto_start_at:
             self.auto_start_at = None
@@ -332,30 +405,43 @@ class Simulator(threading.Thread):
                 self.tour.start_tour()
         if self.mode == "manual":
             cmd = self._manual_command()
-        elif self.mode == "obstacle" and self.tour is not None:
-            cmd = self.tour.step(self.localizer.pose, dt) if self.started else np.zeros(3, dtype=np.float32)
-        else:
-            cmd = self.mission.step(self.localizer.pose, self.robot, dt) if self.started else np.zeros(3, dtype=np.float32)
-        # Safety: never let dead reckoning drive the robot after localization
-        # loss.  Stop and run a global branch search before resuming.
-        if self.mode != "manual" and self.localizer.status == "LOST":
-            # Stop driving on a lost track; otherwise a pinned estimate and a
-            # moving robot diverge without bound.
+        elif not glim_valid:
             cmd = np.zeros(3, dtype=np.float32)
-            if not self.lost_handled:
-                self.localizer.restore_last_good()
-                self.lost_handled = True
-            if self.scan_clock - self.last_reloc_attempt > 2.0 and len(self.localizer.last_scan) > 25:
-                self.last_reloc_attempt = self.scan_clock
-                self.localizer.relocalize(self.localizer.last_scan)
+        elif self.mode == "obstacle" and self.tour is not None:
+            cmd = self.tour.step(navigation_pose, dt) if self.started else np.zeros(3, dtype=np.float32)
         else:
-            self.lost_handled = False
+            cmd = self.mission.step(navigation_pose, self.robot, dt) if self.started else np.zeros(3, dtype=np.float32)
         cmd = np.asarray(cmd, dtype=np.float32)
         self._last_command = cmd.copy()
         cmd[0] = float(np.clip(cmd[0], -CMD_LIMITS[0], CMD_LIMITS[0]))
         cmd[1] = float(np.clip(cmd[1], -CMD_LIMITS[1], CMD_LIMITS[1]))
         cmd[2] = float(np.clip(cmd[2], -CMD_LIMITS[2], CMD_LIMITS[2]))
-        self.robot.infer_step(cmd, pre_step=self.cargo.sync_carried)
+        self.robot.infer_step(
+            cmd,
+            pre_step=self.cargo.sync_carried,
+            post_step=self._capture_slam_sensors,
+        )
+        for record in self.glim_bridge.drain_poses():
+            if record.get("generation") != self.glim_generation:
+                continue
+            raw = np.asarray(record["pose"], dtype=np.float64)
+            self.glim_stamp = float(record["stamp"])
+            yaw_est = math.atan2(
+                2.0 * (raw[6] * raw[5] + raw[3] * raw[4]),
+                1.0 - 2.0 * (raw[4] ** 2 + raw[5] ** 2),
+            )
+            if self.glim_alignment is None:
+                angle = -yaw_est
+                c, s = math.cos(angle), math.sin(angle)
+                aligned_xy = np.array([c * raw[0] - s * raw[1], s * raw[0] + c * raw[1]])
+                self.glim_alignment = (angle, self.spawn[0] - aligned_xy[0], self.spawn[1] - aligned_xy[1])
+            angle, tx, ty = self.glim_alignment
+            c, s = math.cos(angle), math.sin(angle)
+            self.glim_pose = np.array([
+                c * raw[0] - s * raw[1] + tx,
+                s * raw[0] + c * raw[1] + ty,
+                (yaw_est + angle + math.pi) % (2.0 * math.pi) - math.pi,
+            ])
         pos, quat, yaw = self.robot.pose()
         gt = np.array([pos[0], pos[1], yaw], dtype=np.float64)
         # Side-contact pickup.  During a pick task only the selected box can attach.
@@ -403,6 +489,8 @@ class Simulator(threading.Thread):
         st = self.state
         pos, quat, yaw = self.robot.pose()
         gt = np.array([pos[0], pos[1], yaw], dtype=np.float64)
+        glim_valid = self.glim_pose is not None and max(0.0, float(self.data.time) - self.glim_stamp) <= 0.75
+        estimate_pose = self.glim_pose if glim_valid else self.localizer.pose
         scan = self.localizer.last_scan
         step = max(1, len(scan) // 140)
         scan_small = [[round(float(p[0]), 3), round(float(p[1]), 3)] for p in scan[::step]]
@@ -435,13 +523,14 @@ class Simulator(threading.Thread):
             "mode": self.mode,
             "paused": st.paused,
             "started": self.started,
+            "layout_confirmed": st.layout_confirmed,
             "sim_time": round(float(self.data.time), 2),
             "wall_time": round(time.monotonic() - self.wall_start, 1),
             "error": st.error,
             "render_error": st.render_error,
             "robot": {
                 "gt": [round(float(gt[0]), 3), round(float(gt[1]), 3), round(float((gt[2] + math.pi) % (2 * math.pi) - math.pi), 3)],
-                "est": [round(float(self.localizer.pose[0]), 3), round(float(self.localizer.pose[1]), 3), round(float((self.localizer.pose[2] + math.pi) % (2 * math.pi) - math.pi), 3)],
+                "est": [round(float(estimate_pose[0]), 3), round(float(estimate_pose[1]), 3), round(float((estimate_pose[2] + math.pi) % (2 * math.pi) - math.pi), 3)],
                 "z": round(float(pos[2]), 3),
                 "tilt": round(self.robot.tilt(), 1),
                 "fallen": self.robot.fallen(),
@@ -457,8 +546,19 @@ class Simulator(threading.Thread):
                 "latency_ms": round(float(self.localizer.latency_ms), 2),
                 "error": round(float(math.hypot(self.localizer.pose[0] - gt[0], self.localizer.pose[1] - gt[1])), 4),
                 "yaw_error": round(float(abs((self.localizer.pose[2] - gt[2] + math.pi) % (2 * math.pi) - math.pi)), 4),
+                "keyframes": len(self.localizer.mapper.poses),
+                "loop_closures": self.localizer.mapper.loop_closures,
+                "mapped_points": sum(len(scan) for scan in self.localizer.mapper.scans),
                 "scan": scan_small,
                 "trajectory": [[round(float(x), 2), round(float(y), 2)] for x, y in self.localizer.trajectory[-240:]],
+                "glim_status": self.glim_bridge.status(),
+                "glim_pose": None if self.glim_pose is None else [round(float(v), 4) for v in self.glim_pose],
+                "glim_stamp": self.glim_stamp,
+                "glim_valid": glim_valid,
+                "control_source": "manual" if self.mode == "manual" else "glim" if glim_valid else "stopped",
+                "glim_latency_ms": None if self.glim_stamp is None else round(max(0.0, self.data.time - self.glim_stamp) * 1000.0, 1),
+                "glim_error": None if self.glim_pose is None else round(float(math.hypot(self.glim_pose[0] - gt[0], self.glim_pose[1] - gt[1])), 4),
+                "glim_yaw_error": None if self.glim_pose is None else round(float(abs((self.glim_pose[2] - gt[2] + math.pi) % (2 * math.pi) - math.pi)), 4),
             },
             "cargo": self.cargo.snapshot(),
             "decision": mission_t,
@@ -586,8 +686,11 @@ class Handler(BaseHTTPRequestHandler):
                 if action == "start":
                     if self.server.sim.started:
                         return self._json({"ok": True, "already": True})
+                    if self.server.sim.mode == "logistics" and not self.state.layout_confirmed:
+                        return self._json({"error": "请先确认物资布置"}, 409)
                     self.server.sim.auto_start_at = None
                     self.server.sim.started = True
+                    self.state.paused = False
                     if self.server.sim.mode == "logistics":
                         self.server.sim.mission.start()
                     elif self.server.sim.tour is not None:
@@ -602,6 +705,35 @@ class Handler(BaseHTTPRequestHandler):
                     self.state.paused = False
                 elif action == "relocalize":
                     self.state.relocalize_requested = True
+            return self._json({"ok": True})
+        if path == "/api/storage-layout":
+            raw = payload.get("storage")
+            if not isinstance(raw, list) or len(raw) != len(STORAGE):
+                return self._json({"error": "需要提供全部 8 个物块位置"}, 400)
+            positions = []
+            try:
+                entries = sorted(raw, key=lambda item: int(item["id"]))
+                for index, item in enumerate(entries):
+                    if int(item["id"]) != index:
+                        raise ValueError("物块编号不完整")
+                    x, y = float(item["x"]), float(item["y"])
+                    if not (8.1 <= x <= 13.9 and -1.9 <= y <= 1.9):
+                        raise ValueError("物块必须位于任务场地内")
+                    positions.append((x, y))
+                for i, (x, y) in enumerate(positions):
+                    for ox, oy in positions[:i]:
+                        if abs(x - ox) < 0.2 and abs(y - oy) < 0.2:
+                            raise ValueError("物块之间不能重叠")
+            except (KeyError, TypeError, ValueError, OverflowError) as exc:
+                return self._json({"error": str(exc) or "物块坐标无效"}, 400)
+            with self.state.lock:
+                if self.server.sim.started or self.server.sim.mode != "logistics":
+                    return self._json({"error": "仅可在任务赛启动前编辑物资布置"}, 409)
+                self.state.layout_confirmed = False
+                self.state.layout_applied.clear()
+                self.state.layout_requested = positions
+            if not self.state.layout_applied.wait(timeout=3.0):
+                return self._json({"error": "仿真未能应用物资布置"}, 503)
             return self._json({"ok": True})
         if path == "/api/mode":
             mode = payload.get("mode")

@@ -109,6 +109,7 @@ class PickTask:
         self.sweep_elapsed = 0.0
         self.phase_elapsed = 0.0
         self.plan_timer = 0.0
+        self.replans = 0
         self._dbg_t = -10.0
         self._initial_side()
 
@@ -129,8 +130,12 @@ class PickTask:
         lane_y = float(np.clip(lane_y, -1.82, 1.82))
         self.t.approach = (start_x, lane_y)
         obs = [(self.m.cargo.position(o)[0], self.m.cargo.position(o)[1], 0.05) for o in self.m.cargo.cargo if o.side == 0 and o.index != self.cargo.index]
-        self.t.points = self.m.grid.plan(self.m.pose[:2], self.t.approach, ()).points
-        self.follower.set(PathPlan(self.t.points, 0.0))
+        plan = self.m.grid.plan(self.m.pose[:2], self.t.approach, ())
+        self.t.points = plan.points
+        self.follower.set(plan)
+        if not plan.ok:
+            self.t.state = "failed"
+            self.t.note = "取箱点无可行路径"
 
     def tick(self, dt: float) -> np.ndarray:
         self.t.elapsed += dt
@@ -149,7 +154,25 @@ class PickTask:
             if self.t.elapsed - self._dbg_t > 4.0:
                 self._dbg_t = self.t.elapsed
                 self.m.log(f"接近 #{self.cargo.index}: pos ({self.m.pose[0]:.2f},{self.m.pose[1]:.2f}) 目标 {self.t.approach}", "info")
-            cmd, target, remain = self.follower.command(self.m.pose, lookahead=0.75, speed=0.48, fine_distance=0.45)
+            cmd, target, remain = self.follower.command(
+                self.m.pose, lookahead=0.62, speed=0.42, fine_distance=0.45, dt=dt)
+            if self.follower.stuck:
+                if self.replans >= 2:
+                    self.t.state = "failed"
+                    self.t.note = "路径受阻，重规划失败"
+                    return np.zeros(3, dtype=np.float32)
+                self.replans += 1
+                plan = self.m.grid.plan(
+                    self.m.pose[:2], self.t.approach, clear_start=True,
+                    extra_clearance=self.replans)
+                self.t.points = plan.points
+                self.follower.set(plan)
+                if not plan.ok:
+                    self.t.state = "failed"
+                    self.t.note = "取箱点无可行绕行路径"
+                    return np.zeros(3, dtype=np.float32)
+                self.m.log(f"取箱 #{self.cargo.index} 路径停滞 · 扩大避障重规划 {self.replans}/2", "warn")
+                return np.zeros(3, dtype=np.float32)
             if remain < 0.22:
                 self.t.state = "align"
                 self.t.note = "对准取箱方向"
@@ -208,13 +231,18 @@ class DeliverTask:
         self.t = TaskState("deliver", timeout=24.0)
         self.follower = PathFollower()
         self.deposit_timer = 0.0
+        self.deposit_retries = 0
+        self.replans = 0
         zx, zy = HOME[category]
         self.zone = (zx, zy)
-        self.t.approach = (zx - 0.57, zy)
+        self.t.approach = (zx - 0.34, zy)
         obs = [(self.m.cargo.position(o)[0], self.m.cargo.position(o)[1], 0.16) for o in mission.cargo.cargo if o.side == 0]
         plan = mission.grid.plan(mission.pose[:2], self.t.approach, ())
         self.t.points = plan.points
         self.follower.set(plan)
+        if not plan.ok:
+            self.t.state = "failed"
+            self.t.note = "归位区无可行路径"
 
     def tick(self, dt: float) -> np.ndarray:
         self.t.elapsed += dt
@@ -229,20 +257,64 @@ class DeliverTask:
             self.t.state = "approach"
             self.t.note = "前往归位区"
         if self.t.state == "approach":
-            cmd, target, remain = self.follower.command(self.m.pose, lookahead=0.70, speed=0.45, fine_distance=0.45)
-            d_zone = math.hypot(self.m.pose[0] - self.zone[0], self.m.pose[1] - self.zone[1])
-            if remain < 0.22 or d_zone < 0.72:
+            cmd, target, remain = self.follower.command(
+                self.m.pose, lookahead=0.62, speed=0.40, fine_distance=0.45, dt=dt)
+            if self.follower.stuck:
+                if self.replans >= 2:
+                    self.t.state = "failed"
+                    self.t.note = "归位路径受阻，重规划失败"
+                    return np.zeros(3, dtype=np.float32)
+                self.replans += 1
+                plan = self.m.grid.plan(
+                    self.m.pose[:2], self.t.approach, clear_start=True,
+                    extra_clearance=self.replans)
+                self.t.points = plan.points
+                self.follower.set(plan)
+                if not plan.ok:
+                    self.t.state = "failed"
+                    self.t.note = "归位区无可行绕行路径"
+                    return np.zeros(3, dtype=np.float32)
+                self.m.log(f"投放路径停滞 · 扩大避障重规划 {self.replans}/2", "warn")
+                return np.zeros(3, dtype=np.float32)
+            physical_pose = self._physical_pose()
+            yaw = float(physical_pose[2])
+            touching_sides = [c.side for c in self.m.cargo.carried_of(self.category)
+                              if self.m.cargo.touching_home_side(self.category, c.side, physical_pose[:2], yaw)]
+            if touching_sides:
                 self.t.state = "deposit"
                 self.deposit_timer = 0.0
-                self.t.note = "投放 · 叠放"
+                self.deposit_retries = 0
+                self.t.note = "侧面接触 · 投放"
                 cmd = np.zeros(3, dtype=np.float32)
+            elif remain < 0.22:
+                # Turn the matching flank toward the home square before depositing.
+                side = self.m.cargo.carried_of(self.category)[0].side
+                dx, dy = self.zone[0] - self.m.pose[0], self.zone[1] - self.m.pose[1]
+                desired = math.atan2(dy, dx) - side * math.pi / 2
+                control_yaw = float(self.m.pose[2])
+                err = (desired - control_yaw + math.pi) % (2 * math.pi) - math.pi
+                wz = float(np.clip(err * 1.2, -0.65, 0.65))
+                lateral = side * 0.10 if abs(err) < 0.16 else 0.0
+                cmd = np.array([0.0, lateral, wz], dtype=np.float32)
             return cmd
         if self.t.state == "deposit":
-            self.m.cargo.deposit(self.category)
+            physical_pose = self._physical_pose()
+            yaw = float(physical_pose[2])
+            for cargo in self.m.cargo.carried_of(self.category):
+                if self.m.cargo.touching_home_side(self.category, cargo.side, physical_pose[:2], yaw):
+                    self.m.cargo.deposit(self.category, cargo.side)
             self.deposit_timer += dt
-            if self.deposit_timer > 0.8:
+            remaining = self.m.cargo.carried_of(self.category)
+            if not remaining:
                 self.t.state = "retreat"
                 self.retreat_timer = 0.0
+            elif self.deposit_timer > 0.35:
+                # A second same-class box is on the opposite flank. Return to
+                # alignment so the follower can rotate that side into contact.
+                self.t.state = "approach"
+                self.deposit_timer = 0.0
+                self.deposit_retries += 1
+                self.t.note = "调整另一侧物块"
             return np.zeros(3, dtype=np.float32)
         if self.t.state == "retreat":
             self.retreat_timer += dt
@@ -255,6 +327,12 @@ class DeliverTask:
     @property
     def done(self):
         return self.t.state in ("done", "failed")
+
+    def _physical_pose(self):
+        if self.m.m_robot is None:
+            return self.m.pose
+        pos, _, yaw = self.m.m_robot.pose()
+        return np.array([pos[0], pos[1], yaw], dtype=np.float64)
 
 
 class ReturnTask:
@@ -300,6 +378,7 @@ class MissionController:
         self.node_states: dict[str, str] = {}
         self.logs: list[dict] = []
         self.pick_failures: dict[int, float] = {}
+        self.delivery_failures = 0
         self.last_decision_time = -1.0
         self.bar_crossed = False
         self.bar_latch = False
@@ -329,6 +408,7 @@ class MissionController:
         self.action = "idle"
         self.logs = []
         self.pick_failures = {}
+        self.delivery_failures = 0
         self.bar_crossed = False
         self.bar_latch = False
         self.carried_prev = 0
@@ -447,6 +527,14 @@ class MissionController:
                     self.log(f"任务失败: {self.task.t.note}", "warn")
                     if isinstance(self.task, PickTask):
                         self.pick_failures[self.task.t.target] = self.mission_time
+                    elif isinstance(self.task, DeliverTask):
+                        self.delivery_failures += 1
+                        if self.delivery_failures >= 2:
+                            self.finished = True
+                            self.log("归位连续失败 · 安全停止自主任务", "end")
+                            return np.zeros(3, dtype=np.float32)
+                elif isinstance(self.task, DeliverTask):
+                    self.delivery_failures = 0
                 self.task = None
             action = self._decide(dt)
             self._status_text = self.reason

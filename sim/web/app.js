@@ -25,6 +25,9 @@
   let inlierHistory = [];
   let dragging = null;
   let toastTimer = null;
+  let layoutEditing = false;
+  let layoutConfirmed = false;
+  let layoutDrag = null;
 
   const modeButtons = [];
   const treeNodes = new Map();
@@ -65,6 +68,9 @@
     buildCargoGrid();
     mapImg = new Image();
     mapImg.src = "/map.png";
+    layoutConfirmed = false;
+    const startButton = $("#btnStart");
+    startButton.disabled = true;
     resizeCanvas();
     window.addEventListener("resize", resizeCanvas);
     bindControls();
@@ -92,6 +98,15 @@
     for (const b of modeButtons) b.classList.toggle("on", b.dataset.mode === id);
     $("#modeDesc").textContent = config.modes[id]?.description || "";
     $("#manualPad").classList.toggle("show", id === "manual");
+    if (id !== "logistics" && layoutEditing) {
+      layoutEditing = false;
+      $("#btnLayoutEdit").classList.remove("on");
+      $("#btnLayoutConfirm").hidden = true;
+      $("#layoutHint").hidden = true;
+      $("#minimap").classList.remove("layout-editing");
+    }
+    $("#btnStart").disabled = id === "logistics" && !layoutConfirmed;
+    $("#btnLayoutEdit").disabled = started || id !== "logistics";
     if (id === "manual") setCamera("wide");
   }
 
@@ -172,6 +187,7 @@
 
   function bindControls() {
     $("#btnStart").onclick = async () => {
+      if (!layoutConfirmed && mode === "logistics") { toast("请先编辑并确认物资布置", "warn"); return; }
       const ok = await post("/api/mission", { action: "start" });
       if (ok) {
         started = true;
@@ -182,6 +198,7 @@
       }
     };
     $("#btnMission").onclick = async () => {
+      if (!layoutConfirmed && mode === "logistics") { toast("请先编辑并确认物资布置", "warn"); return; }
       const ok = await post("/api/mission", { action: "start" });
       if (ok) {
         started = true;
@@ -207,6 +224,35 @@
       await post("/api/mission", { action: "relocalize" });
       toast("已触发 GLIM 全局重定位");
     };
+    $("#btnLayoutEdit").onclick = () => {
+      if (started || mode !== "logistics") return;
+      layoutEditing = !layoutEditing;
+      if (layoutEditing) {
+        mapView = "task";
+        $$(".map-tabs button").forEach((b) => b.classList.toggle("on", b.dataset.view === "task"));
+        $("#mapLabel").textContent = "TASK FIELD · 任务赛区";
+        layoutConfirmed = false;
+        $("#btnStart").disabled = true;
+      }
+      $("#btnLayoutEdit").classList.toggle("on", layoutEditing);
+      $("#btnLayoutConfirm").hidden = !layoutEditing;
+      $("#layoutHint").hidden = !layoutEditing;
+      $("#minimap").classList.toggle("layout-editing", layoutEditing);
+      drawMap();
+    };
+    $("#btnLayoutConfirm").onclick = async () => {
+      const result = await post("/api/storage-layout", { storage: config.storage.map((p, id) => ({ id, x: p.x, y: p.y })) });
+      if (!result) return;
+      layoutConfirmed = true;
+      layoutEditing = false;
+      $("#btnLayoutEdit").classList.remove("on");
+      $("#btnLayoutConfirm").hidden = true;
+      $("#layoutHint").hidden = true;
+      $("#minimap").classList.remove("layout-editing");
+      $("#btnStart").disabled = false;
+      drawMap();
+      toast("物资布置已确认，可以启动任务");
+    };
     $$(".cam").forEach((b) => {
       b.onclick = () => setCamera(b.dataset.cam);
     });
@@ -217,6 +263,47 @@
         $("#mapLabel").textContent = mapView === "task" ? "TASK FIELD · 任务赛区" : "FULL COURSE · 全场";
       };
     });
+    const mapCanvas = $("#minimap");
+    const mapPoint = (event) => {
+      const r = mapCanvas.getBoundingClientRect();
+      const [x0, x1, y0, y1] = viewBounds();
+      const pad = 8;
+      const sx = (mapCanvas.width - pad * 2) / (x1 - x0);
+      const sy = (mapCanvas.height - pad * 2) / (y1 - y0);
+      const scale = Math.min(sx, sy);
+      const ox = pad + ((mapCanvas.width - pad * 2) - (x1 - x0) * scale) / 2;
+      const oy = pad + ((mapCanvas.height - pad * 2) - (y1 - y0) * scale) / 2;
+      const px = (event.clientX - r.left) * mapCanvas.width / r.width;
+      const py = (event.clientY - r.top) * mapCanvas.height / r.height;
+      return [(px - ox) / scale + x0, y1 - (py - oy) / scale];
+    };
+    mapCanvas.addEventListener("pointerdown", (event) => {
+      if (!layoutEditing || started) return;
+      const [x, y] = mapPoint(event);
+      const index = config.storage.findIndex((p) => Math.hypot(p.x - x, p.y - y) < 0.24);
+      if (index < 0) return;
+      layoutDrag = { index, pointerId: event.pointerId };
+      mapCanvas.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    });
+    mapCanvas.addEventListener("pointermove", (event) => {
+      if (!layoutDrag || event.pointerId !== layoutDrag.pointerId) return;
+      let [x, y] = mapPoint(event);
+      x = clamp(x, 8.2, 13.8); y = clamp(y, -1.8, 1.8);
+      const slot = config.storage_slots.find((p) => Math.hypot(p.x - x, p.y - y) <= 0.28);
+      if (slot) [x, y] = [slot.x, slot.y];
+      config.storage[layoutDrag.index].x = x;
+      config.storage[layoutDrag.index].y = y;
+      layoutConfirmed = false;
+      $("#btnStart").disabled = true;
+      drawMap();
+      event.preventDefault();
+    });
+    const finishLayoutDrag = (event) => {
+      if (layoutDrag && event.pointerId === layoutDrag.pointerId) layoutDrag = null;
+    };
+    mapCanvas.addEventListener("pointerup", finishLayoutDrag);
+    mapCanvas.addEventListener("pointercancel", finishLayoutDrag);
     // Manual key handling.
     const valid = new Set(["w", "a", "s", "d", "q", "e", "space", "shift"]);
     const pressed = new Set();
@@ -308,6 +395,9 @@
     }
     started = !!s.started;
     paused = !!s.paused;
+    if (!layoutEditing && s.layout_confirmed !== undefined) layoutConfirmed = !!s.layout_confirmed;
+    $("#btnStart").disabled = mode === "logistics" && !layoutConfirmed;
+    $("#btnLayoutEdit").disabled = started || mode !== "logistics";
     render();
   }
 
@@ -328,18 +418,20 @@
     $("#carry").textContent = `${state.stats?.carried ?? 0} / 2`;
     $("#carrySub").textContent = (state.stats?.carried ?? 0) === 0 ? "空载" : "侧面夹持";
     const locEl = $("#locState");
-    const status = loc.status || "TRACKING";
+    const glim = loc.glim_status || {};
+    const hasGlimPose = Boolean(glim.ready && loc.glim_valid && loc.glim_pose);
+    const status = hasGlimPose ? "GLIM GPU" : glim.ready && loc.glim_pose ? "GLIM 位姿过期" : glim.ready ? "GLIM 初始化" : "GLIM 未运行";
     locEl.textContent = status;
-    locEl.className = status === "TRACKING" ? "mint" : status === "DEGRADED" ? "amber" : "red";
-    $("#locErr").textContent = `误差 ${(loc.error ?? 0).toFixed(3)} m`;
+    locEl.className = hasGlimPose ? "mint" : glim.ready ? "amber" : "red";
+    $("#locErr").textContent = loc.glim_error == null ? "等待有效位姿" : `误差 ${loc.glim_error.toFixed(3)} m`;
     $("#hudLoc").textContent = status;
-    $("#hudLocHz").textContent = `${(loc.latency_ms ?? 0).toFixed(1)} ms`;
+    $("#hudLocHz").textContent = hasGlimPose ? `${(loc.glim_latency_ms ?? 0).toFixed(0)} ms` : "等待初始化";
     const dot = $("#locDot");
-    dot.className = "dot" + (status === "TRACKING" ? "" : status === "DEGRADED" ? " warn" : " bad");
-    $("#hudErr").textContent = `${(loc.error ?? 0).toFixed(3)} m`;
-    $("#hudInlier").textContent = `${loc.inliers ?? 0}`;
-    $("#hudRmse").textContent = `${(loc.rmse ?? 0).toFixed(3)} m`;
-    $("#inlierBar").style.width = `${clamp((loc.inliers ?? 0) / 360 * 100, 0, 100)}%`;
+    dot.className = "dot" + (hasGlimPose ? "" : glim.ready ? " warn" : " bad");
+    $("#hudErr").textContent = loc.glim_error == null ? "--" : `${loc.glim_error.toFixed(3)} m`;
+    $("#hudInlier").textContent = `${glim.processed_scans ?? 0}`;
+    $("#hudRmse").textContent = `${glim.dropped_scans ?? 0}`;
+    $("#inlierBar").style.width = `${clamp((glim.ready ? 100 : 0), 0, 100)}%`;
     // Phase
     const task = d.task;
     $("#phase").textContent = task?.note || d.status || "待机";
@@ -380,11 +472,11 @@
       el.className = "cargo" + (c.status === "carried" ? " carried" : c.status === "home" || c.status === "stack" ? " home" : c.status === "loose" ? " loose" : "");
     }
     // KV
-    $("#kvEst").textContent = fmtPose(robot.est);
+    $("#kvEst").textContent = fmtPose(loc.glim_pose);
     $("#kvGt").textContent = fmtPose(robot.gt);
-    $("#kvYawErr").textContent = `${((loc.yaw_error ?? 0) * 180 / Math.PI).toFixed(1)}°`;
-    $("#kvCorr").textContent = `${(loc.correction ?? 0).toFixed(3)} m`;
-    $("#kvLatency").textContent = `${(loc.latency_ms ?? 0).toFixed(1)} ms`;
+    $("#kvYawErr").textContent = loc.glim_yaw_error == null ? "--" : `${(loc.glim_yaw_error * 180 / Math.PI).toFixed(1)}°`;
+    $("#kvCorr").textContent = `${glim.processed_scans ?? 0} / ${glim.dropped_scans ?? 0}`;
+    $("#kvLatency").textContent = loc.glim_latency_ms == null ? "--" : `${loc.glim_latency_ms.toFixed(0)} ms`;
     // Logs
     renderLogs(d.logs || []);
     // stream status
@@ -395,7 +487,7 @@
     if (state.error) toast("仿真错误: " + state.error, "warn");
     if (state.render_error) toast("渲染错误: " + state.render_error, "warn");
     // history for scan chart
-    errorHistory.push(loc.error ?? 0); inlierHistory.push(loc.inliers ?? 0);
+    errorHistory.push(loc.glim_error ?? 0); inlierHistory.push(glim.ready ? 1 : 0);
     if (errorHistory.length > 140) { errorHistory.shift(); inlierHistory.shift(); }
     drawScanChart();
     drawMap();
@@ -506,13 +598,23 @@
       ctx.strokeStyle = "rgba(89,239,199,.35)"; ctx.lineWidth = Math.max(1, s * 0.008); ctx.stroke();
     }
     // Cargo
-    for (const c of state?.cargo || []) {
+    const cargoForMap = layoutEditing
+      ? config.storage.map((p, id) => ({ id, category: p.category, status: "storage", pos: [p.x, p.y] }))
+      : (state?.cargo || []);
+    for (const c of cargoForMap) {
       const cat = config.categories.find((x) => x.id === c.category);
       const color = cat?.color || "#aaa";
       const [bx, by] = c.pos;
       ctx.fillStyle = color;
       ctx.globalAlpha = c.status === "carried" ? 0.95 : 0.8;
       ctx.fillRect(X(bx - 0.1), Y(by + 0.1), 0.2 * s, 0.2 * s);
+      if (layoutEditing) {
+        ctx.strokeStyle = "#f5f7f8"; ctx.lineWidth = Math.max(1, s * 0.012);
+        ctx.strokeRect(X(bx - 0.1), Y(by + 0.1), 0.2 * s, 0.2 * s);
+        ctx.fillStyle = "#101820"; ctx.font = `${Math.max(9, s * 0.12)}px sans-serif`;
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText(String(c.id + 1), X(bx), Y(by));
+      }
       ctx.globalAlpha = 1;
       if (c.status === "carried") {
         ctx.strokeStyle = "#59efc7"; ctx.lineWidth = 2;
@@ -563,7 +665,7 @@
       }
     };
     draw(errorHistory, 0.35, "#f4b35a", "rgba(244,179,90,.08)");
-    draw(inlierHistory, 360, "#59efc7", "rgba(89,239,199,.07)");
+    draw(inlierHistory, 1, "#59efc7", "rgba(89,239,199,.07)");
     ctx.font = `${9 * dpr}px monospace`;
     ctx.fillStyle = "#f4b35a"; ctx.fillText("ERR", 5 * dpr, 11 * dpr);
     ctx.fillStyle = "#59efc7"; ctx.fillText("INLIERS", 34 * dpr, 11 * dpr);

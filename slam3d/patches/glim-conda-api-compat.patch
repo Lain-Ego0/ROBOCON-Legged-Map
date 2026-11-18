@@ -1,0 +1,15 @@
+diff --git a/src/glim/odometry/robust_initial_state_estimation_odom.cpp b/src/glim/odometry/robust_initial_state_estimation_odom.cpp
+index 4b70ad1..e52f48c 100644
+--- a/src/glim/odometry/robust_initial_state_estimation_odom.cpp
++++ b/src/glim/odometry/robust_initial_state_estimation_odom.cpp
+@@ -62,1 +62,1 @@
+-    const gtsam::Rot3 pred_R_odom_lidar = pred_T_odom_imu.rotation() * gtsam::Rot3(T_lidar_imu.linear()).inverse();
++    const gtsam::Rot3 pred_R_odom_lidar = pred_T_odom_imu.pose().rotation() * gtsam::Rot3(T_lidar_imu.linear()).inverse();
+diff --git a/src/glim/odometry/odometry_estimation_gpu.cpp b/src/glim/odometry/odometry_estimation_gpu.cpp
+index 81ba5d2..bb04fab 100644
+--- a/src/glim/odometry/odometry_estimation_gpu.cpp
++++ b/src/glim/odometry/odometry_estimation_gpu.cpp
+@@ -176,1 +176,2 @@
+-    if (target < 0 || !frames.has_index(target)) {
++    const auto oldest_frame = frames.size() - frames.inner_size();
++    if (target < 0 || static_cast<size_t>(target) < oldest_frame || !frames[target]) {
