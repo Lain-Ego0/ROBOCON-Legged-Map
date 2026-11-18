@@ -9,7 +9,7 @@ usage() {
 Usage: ./scripts/setup_env.sh [--python-only]
 
 Prepare the locked Python environment. By default, also build and validate the
-GLIM CUDA backend when its source and native dependencies are available.
+GLIM CPU backend when its source and native dependencies are available.
 
 Options:
   --python-only  Set up Python dependencies without building GLIM.
@@ -67,7 +67,7 @@ fi
 
 GLIM_SOURCE="${GLIM_SOURCE:-$ROOT/build/glim-upstream}"
 missing=()
-for tool in cmake nvcc; do
+for tool in cmake; do
   command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
 done
 [[ -f "$GLIM_SOURCE/CMakeLists.txt" ]] || missing+=("GLIM source at $GLIM_SOURCE")
@@ -76,15 +76,15 @@ if ((${#missing[@]})); then
   printf '\nPython environment is ready, but the GLIM backend cannot be built yet.\n' >&2
   printf 'Missing native prerequisites:\n' >&2
   printf '  - %s\n' "${missing[@]}" >&2
-  printf '\nInstall CUDA Toolkit, CMake, CUDA-enabled gtsam_points and GLIM native dependencies,\n' >&2
+  printf '\nInstall CMake, GTSAM, gtsam_points and GLIM native dependencies,\n' >&2
   printf 'then place a compatible GLIM checkout in build/glim-upstream/ or set GLIM_SOURCE.\n' >&2
   printf 'See sim/docs/reproduction.md for the native dependency list.\n' >&2
   exit 2
 fi
 
-printf '\nBuilding GLIM CUDA backend...\n'
+printf '\nBuilding GLIM CPU backend...\n'
 GLIM_SOURCE="$GLIM_SOURCE" ./slam3d/build_glim.sh
-printf '\nValidating CUDA and GLIM libraries...\n'
+printf '\nValidating GLIM CPU modules...\n'
 ./slam3d/validate_glim.sh
 
 printf '\nEnvironment setup complete. Start the simulator with: uv run python -m sim.app --no-open\n'

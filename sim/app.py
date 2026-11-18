@@ -28,9 +28,10 @@ from . import scene as scene_builder
 from .cargo import CargoManager
 from .config import (
     ASSETS, CAMERA_PRESETS, CATEGORIES, CATEGORY_COLORS, CATEGORY_ZH,
-    CMD_LIMITS, HOST, HOME, HOME_ORDER, MISSION_SECONDS, OBSTACLE_CHECKPOINT_RADIUS,
-    OBSTACLE_ROUTE, POLICY, PORT, SCENE, START_LOGISTICS, START_MANUAL,
-    START_OBSTACLE, STORAGE, TREE, WEB,
+    CMD_LIMITS, HOST, HOME, HOME_ORDER, LIDAR3D_CHANNELS, LIDAR3D_MAX_RANGE,
+    LIDAR3D_NOISE_STD, LIDAR3D_PROFILE, LIDAR3D_RAYS_PER_SCAN, LIDAR3D_SCAN_HZ,
+    MISSION_SECONDS, OBSTACLE_CHECKPOINT_RADIUS, OBSTACLE_ROUTE, POLICY, PORT,
+    SCENE, START_LOGISTICS, START_MANUAL, START_OBSTACLE, STORAGE, TREE, WEB,
 )
 from .glim_bridge import GLIMBridge
 from .localization import GLIMLocalizer, LidarScanner, LidarScanner3D
@@ -231,9 +232,9 @@ class Simulator(threading.Thread):
         self.localizer = GLIMLocalizer(START_LOGISTICS[:2], 0.0)
         root = pathlib.Path(__file__).resolve().parents[1]
         self.glim_bridge = GLIMBridge(
-            root / "build/glim-runtime/mujoco_glim_bridge",
+            root / "build/glim-cpu-runtime/mujoco_glim_bridge",
             root / "slam3d/config",
-            root / "build/glim-runtime",
+            root / "build/glim-cpu-runtime",
         )
         self.glim_pose = None
         self.glim_stamp = None
@@ -260,6 +261,16 @@ class Simulator(threading.Thread):
             "bounds": [-7.35, 14.35, -3.15, 3.15],
             "mission_seconds": MISSION_SECONDS,
             "policy": "sdog_mixed_moe_cts_100k.pt · 45 obs · 10-frame history",
+            "lidar3d": {
+                "profile": LIDAR3D_PROFILE,
+                "channels": LIDAR3D_CHANNELS,
+                "scan_hz": LIDAR3D_SCAN_HZ,
+                "rays_per_scan": LIDAR3D_RAYS_PER_SCAN,
+                "max_range_m": LIDAR3D_MAX_RANGE,
+                "noise_std_m": LIDAR3D_NOISE_STD,
+                "imu_hz": 500.0,
+                "hardware_target_point_rate_hz": 200000.0,
+            },
             "map_url": "/map.png",
         }
 

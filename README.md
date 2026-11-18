@@ -10,7 +10,7 @@
 ./scripts/setup_env.sh --python-only
 ```
 
-需要 3D 定位时，先按[复现说明](sim/docs/reproduction.md)准备 CUDA Toolkit、GLIM 原生依赖和 GLIM 源码，再运行 `./scripts/setup_env.sh` 完成检查、构建和验证。启动仿真：
+需要 3D 定位时，先按[复现说明](sim/docs/reproduction.md)准备 GLIM CPU 原生依赖和源码，再运行 `./scripts/setup_env.sh` 完成检查、构建和验证。启动仿真：
 
 ```bash
 uv run python -m sim.app --no-open
@@ -30,7 +30,7 @@ uv run python -m sim.app --no-open
 
 `sim/app.py` 运行 MuJoCo 主循环和 HTTP 服务；`sim/robot.py` 执行策略推理；`sim/cargo.py` 管理物资接触、携带、释放和叠放；`sim/mission.py` 管理任务状态机与计分；`sim/planning.py` 提供占据栅格、A* 和路径跟踪。
 
-`sim/localization.py` 中的 `LidarScanner3D` 由场景几何射线生成 16 线点云，默认扫描频率约 3.33 Hz、每圈 300 个方位采样，并采集 500 Hz IMU。`sim/glim_bridge.py` 将传感器数据送入独立原生进程；`slam3d/native/glim_bridge.cpp` 调用 GLIM 的预处理、GPU 里程计、子图和全局位姿图模块。地面真值只用于误差遥测，不传入估计器。定位延迟过高时自主控制会停车，不会用地面真值或旧二维定位器代替导航位姿。
+`sim/localization.py` 中的 `LidarScanner3D` 由场景几何射线生成 Mid-360 形状的 16 线点云，扫描频率为 10 Hz，并采集 500 Hz IMU。默认 `balanced` 模式每帧使用 20,000 条射线，当前场地约返回 8,000 个有效点；`high_fidelity` 模式使用 70,400 条射线，适合测量高密度传感器压力。方位采用确定性的低重复序列，模拟非重复扫描。`sim/glim_bridge.py` 将传感器数据送入独立原生进程；`slam3d/native/glim_bridge.cpp` 调用 GLIM 的 CPU 里程计、GICP、直通子图和全局位姿图模块。地面真值只用于误差遥测，不传入估计器。定位延迟过高时自主控制会停车，不会用地面真值或旧二维定位器代替导航位姿。
 
 ## 常用检查
 
@@ -40,13 +40,13 @@ node --check sim/web/app.js
 git diff --check
 ```
 
-CUDA/GLIM 动态库检查、MuJoCo 传感器回放和完整运行记录见[复现说明](sim/docs/reproduction.md)。回放脚本会加速仿真，不应用它单独判断实时吞吐能力。
+GLIM CPU 动态库检查、MuJoCo 传感器回放和完整运行记录见[复现说明](sim/docs/reproduction.md)。回放脚本会加速仿真，不应用它单独判断实时吞吐能力。
 
 ## 当前边界
 
 - 障碍赛是检查点路线演示，尚未实现规则书中的裁判级越障检测。
 - 搬运使用侧面接触吸附和区域释放，不模拟机械臂抓取。
-- GLIM 的吞吐取决于 GPU、CPU 负载和其他进程。应在目标机器的实际并发条件下检查位姿年龄与丢帧数；位姿失效时系统会停车。
+- GLIM 的吞吐取决于 CPU 型号、负载和其他进程。应在目标机器的实际并发条件下检查位姿年龄与丢帧数；位姿失效时系统会停车。
 - 任务得分取决于场景、策略和运行状态。历史单次测试成绩不代表每次运行结果。
 
 ## 文件位置

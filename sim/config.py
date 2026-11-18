@@ -1,6 +1,7 @@
 """Shared constants, rule-book geometry, and the policy decision tree."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -77,6 +78,31 @@ ROBOT_RADIUS = 0.30
 CMD_LIMITS = (1.15, 0.55, 1.20)
 CRUISE_SPEED = 0.62
 FINE_SPEED = 0.34
+
+# Mid-360-shaped simulation sensor budgets. The simulator uses MuJoCo ray
+# casts, so the ray budget is higher than the returned point count because
+# rays can miss the field geometry. The default keeps ordinary development
+# machines close to real time; high-fidelity input remains available for
+# sensor-load tests.
+LIDAR3D_CHANNELS = 16
+LIDAR3D_SCAN_HZ = 10.0
+LIDAR3D_PROFILE = os.environ.get("ROBOCON_LIDAR_PROFILE", "balanced").strip().lower()
+LIDAR3D_RAY_BUDGETS = {
+    "realtime": 16_000,
+    "balanced": 20_000,
+    "high_fidelity": 70_400,
+}
+if LIDAR3D_PROFILE not in LIDAR3D_RAY_BUDGETS:
+    raise ValueError(
+        f"Unknown ROBOCON_LIDAR_PROFILE={LIDAR3D_PROFILE!r}; "
+        f"choose one of {', '.join(LIDAR3D_RAY_BUDGETS)}"
+    )
+LIDAR3D_RAYS_PER_SCAN = int(
+    os.environ.get("ROBOCON_LIDAR_RAYS_PER_SCAN", LIDAR3D_RAY_BUDGETS[LIDAR3D_PROFILE])
+)
+LIDAR3D_MAX_RANGE = 9.0
+LIDAR3D_NOISE_STD = 0.004
+LIDAR3D_AZIMUTH_GOLDEN_RATIO = 0.6180339887498949
 
 # Camera presets: azimuth / elevation / distance.
 CAMERA_PRESETS = {

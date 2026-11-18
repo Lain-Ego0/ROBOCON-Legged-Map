@@ -467,8 +467,24 @@ class LidarScanner:
 class LidarScanner3D:
     """Spinning multi-beam LiDAR synthesized from MuJoCo ray casts."""
 
-    def __init__(self, model, data, channels: int = 16, azimuths_per_step: int = 2):
+    def __init__(
+        self,
+        model,
+        data,
+        channels: int | None = None,
+        scan_hz: float | None = None,
+        rays_per_scan: int | None = None,
+    ):
         import mujoco
+
+        from .config import (
+            LIDAR3D_AZIMUTH_GOLDEN_RATIO,
+            LIDAR3D_CHANNELS,
+            LIDAR3D_MAX_RANGE,
+            LIDAR3D_NOISE_STD,
+            LIDAR3D_RAYS_PER_SCAN,
+            LIDAR3D_SCAN_HZ,
+        )
 
         self.mujoco = mujoco
         self.model = model
@@ -476,14 +492,23 @@ class LidarScanner3D:
         self.site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "imu_lidar_site")
         if self.site_id < 0:
             raise ValueError("MuJoCo model is missing imu_lidar_site")
-        self.channels = channels
-        self.azimuths_per_step = azimuths_per_step
-        self.azimuth_slices = 300
-        self.elevations = np.deg2rad([-25, -18, -12, -8, -5, -2, 1, 4, 7, 10, 14, 19, 25, 32, 40, 50])[:channels]
+        self.channels = channels or LIDAR3D_CHANNELS
+        self.scan_hz = scan_hz or LIDAR3D_SCAN_HZ
+        self.rays_per_scan = rays_per_scan or LIDAR3D_RAYS_PER_SCAN
+        if self.rays_per_scan % self.channels:
+            raise ValueError("rays_per_scan must be divisible by channels")
+        self.azimuth_slices = self.rays_per_scan // self.channels
+        scan_steps = max(1, round((1.0 / self.scan_hz) / 0.002))
+        self.azimuths_per_step = max(1, self.azimuth_slices // scan_steps)
+        self.azimuth_slices = self.azimuths_per_step * scan_steps
+        self.elevations = np.deg2rad([-25, -18, -12, -8, -5, -2, 1, 4, 7, 10, 14, 19, 25, 32, 40, 50])[:self.channels]
         self.geomgroup = np.array([1, 0, 0, 0, 0, 0], dtype=np.uint8)
-        self.max_range = 9.0
+        self.max_range = LIDAR3D_MAX_RANGE
+        self.noise_std = LIDAR3D_NOISE_STD
+        self.azimuth_ratio = LIDAR3D_AZIMUTH_GOLDEN_RATIO
         self.rng = np.random.default_rng(19)
         self.slice_index = 0
+        self.sample_index = 0
         self.scan_start = None
         self.points: list[tuple[float, float, float, float]] = []
         base_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "base_link")
@@ -497,6 +522,7 @@ class LidarScanner3D:
 
     def reset(self):
         self.slice_index = 0
+        self.sample_index = 0
         self.scan_start = None
         self.points.clear()
 
@@ -505,36 +531,51 @@ class LidarScanner3D:
             self.scan_start = stamp
         origin = self.data.site_xpos[self.site_id].copy()
         rotation = self.data.site_xmat[self.site_id].reshape(3, 3).copy()
-        geom_id_out = np.zeros(1, dtype=np.int32)
-        begin = self.slice_index * self.azimuth_slices / (self.azimuth_slices // self.azimuths_per_step)
-        for az_index in range(self.azimuths_per_step):
-            azimuth = 2.0 * math.pi * (begin + az_index) / self.azimuth_slices
-            for ring, elevation in enumerate(self.elevations):
-                ce = math.cos(elevation)
-                direction_local = np.array([ce * math.cos(azimuth), ce * math.sin(azimuth), math.sin(elevation)])
-                direction_world = rotation @ direction_local
-                ray_origin = origin.copy()
-                traveled = 0.0
-                while traveled < self.max_range:
-                    distance = self.mujoco.mj_ray(
-                        self.model, self.data, ray_origin, direction_world,
-                        self.geomgroup, 1, -1, geom_id_out)
-                    if distance < 0.0:
-                        break
-                    traveled += distance
-                    geom_id = int(geom_id_out[0])
-                    body_id = int(self.model.geom_bodyid[geom_id])
-                    if body_id not in self.robot_bodies:
-                        break
-                    advance = distance + 0.012
-                    ray_origin = ray_origin + direction_world * advance
-                    traveled += 0.012
-                if distance < 0.12 or traveled >= self.max_range:
-                    continue
-                noisy_distance = traveled + self.rng.normal(0.0, 0.004)
-                local_point = direction_local * noisy_distance
-                point_time = stamp - self.scan_start
-                self.points.append((local_point[0], local_point[1], local_point[2], point_time))
+        # A golden-ratio sequence avoids repeating the same azimuth grid
+        # every revolution while retaining deterministic replay. Numpy keeps
+        # direction generation out of the per-ray Python loop.
+        sample_indices = self.sample_index + np.arange(self.azimuths_per_step, dtype=np.float64)
+        phases = (sample_indices * self.azimuth_ratio) % 1.0
+        azimuths = 2.0 * math.pi * phases
+        elevations = self.elevations[None, :]
+        cos_elevations = np.cos(elevations)
+        local_directions = np.stack(
+            (
+                cos_elevations * np.cos(azimuths[:, None]),
+                cos_elevations * np.sin(azimuths[:, None]),
+                np.broadcast_to(np.sin(elevations), (self.azimuths_per_step, self.channels)),
+            ),
+            axis=-1,
+        )
+        self.sample_index += self.azimuths_per_step
+
+        flat_local = local_directions.reshape(-1, 3)
+        flat_world = (rotation @ flat_local.T).T
+        geom_ids = np.full(len(flat_world), -1, dtype=np.int32)
+        distances = np.full(len(flat_world), -1.0, dtype=np.float64)
+        self.mujoco.mj_multiRay(
+            self.model,
+            self.data,
+            origin,
+            np.ascontiguousarray(flat_world.reshape(-1)),
+            self.geomgroup,
+            1,
+            -1,
+            geom_ids,
+            distances,
+            None,
+            len(flat_world),
+            self.max_range,
+        )
+        valid = (distances >= 0.12) & (distances < self.max_range)
+        if np.any(valid):
+            noisy_distances = distances[valid] + self.rng.normal(0.0, self.noise_std, int(valid.sum()))
+            local_points = flat_local[valid] * noisy_distances[:, None]
+            point_time = stamp - self.scan_start
+            self.points.extend(
+                (float(point[0]), float(point[1]), float(point[2]), point_time)
+                for point in local_points
+            )
         self.slice_index += self.azimuths_per_step
         if self.slice_index < self.azimuth_slices:
             return None

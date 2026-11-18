@@ -36,9 +36,9 @@ def main():
     sensor_ids = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SENSOR, name) for name in ("imu_accel", "imu_gyro")]
     sensor_adrs = [int(model.sensor_adr[sid]) for sid in sensor_ids]
     bridge = GLIMBridge(
-        root / "build/glim-runtime/mujoco_glim_bridge",
+        root / "build/glim-cpu-runtime/mujoco_glim_bridge",
         root / "slam3d/config",
-        root / "build/glim-runtime",
+        root / "build/glim-cpu-runtime",
     )
     imu_batch = []
     scans = 0

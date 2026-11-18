@@ -64,8 +64,8 @@ int main(int argc, char** argv) {
     glim::GlobalConfig::instance(argv[1], true);
 
     const std::string module_dir = argv[2];
-    auto odometry = glim::OdometryEstimationBase::load_module(module_dir + "/libodometry_estimation_gpu.so");
-    auto sub_mapping = glim::SubMappingBase::load_module(module_dir + "/libsub_mapping.so");
+    auto odometry = glim::OdometryEstimationBase::load_module(module_dir + "/libodometry_estimation_cpu.so");
+    auto sub_mapping = glim::SubMappingBase::load_module(module_dir + "/libsub_mapping_passthrough.so");
     auto global_mapping = glim::GlobalMappingBase::load_module(module_dir + "/libglobal_mapping_pose_graph.so");
     if (!odometry || !sub_mapping || !global_mapping) {
       throw std::runtime_error("failed to load one or more GLIM modules");
