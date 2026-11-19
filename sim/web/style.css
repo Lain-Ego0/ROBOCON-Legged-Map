@@ -106,9 +106,6 @@ button{font-family:inherit}
 .stage-vignette{position:absolute;inset:0;pointer-events:none;background:
   radial-gradient(120% 90% at 50% 45%,transparent 45%,rgba(0,4,10,.55) 100%),
   linear-gradient(180deg,rgba(0,4,10,.5),transparent 18%,transparent 78%,rgba(0,4,10,.55))}
-.stage-grid{position:absolute;inset:0;pointer-events:none;opacity:.1;
-  background-image:linear-gradient(rgba(160,220,255,.5) 1px,transparent 1px),linear-gradient(90deg,rgba(160,220,255,.5) 1px,transparent 1px);
-  background-size:64px 64px;mask-image:radial-gradient(circle at 50% 50%,#000,transparent 80%)}
 .cam-presets{position:absolute;top:13px;left:13px;display:flex;gap:4px;padding:4px;border-radius:10px;
   background:rgba(4,9,15,.62);border:1px solid rgba(110,170,210,.2);backdrop-filter:blur(10px)}
 .cam{border:0;background:transparent;color:#8fa7bd;font-size:10.5px;font-weight:700;padding:6px 9px;border-radius:7px;cursor:pointer}
@@ -225,3 +222,57 @@ body{background:#101820;color:#e1e7eb}
 #minimap.layout-editing{cursor:grab;touch-action:none}
 #minimap.layout-editing:active{cursor:grabbing}
 #btnStart:disabled{opacity:.45;cursor:not-allowed;filter:grayscale(.6)}
+
+/* Light, restrained technology palette for the operator interface. */
+:root{
+  --bg:#f8fafc; --bg2:#ffffff; --panel:#ffffff; --panel2:#ffffff;
+  --line:#e2e8f0; --line2:#cbd5e1;
+  --text:#0f172a; --muted:#475569; --dim:#64748b;
+  --mint:#0284c7; --mint2:#0369a1; --cyan:#00aaff;
+  --amber:#c27813; --red:#dc4050; --violet:#7457c8;
+}
+body{background:#f8fafc;color:#0f172a}
+.topbar{color:#0f172a}
+.brand-mark{color:#0284c7;background:#eaf6fc;border-color:#bae6fd;box-shadow:none}
+.brand-en{color:#0284c7}
+.brand-sub,.stat i,.stage-foot,.log .t{color:#64748b}
+.stat,.card{background:#fff;border-color:#e2e8f0;color:#0f172a;box-shadow:0 2px 8px rgba(15,23,42,.045)}
+.stat span,.mode-desc,.legend .item,.log{color:#475569}
+.card h2{color:#0f172a}
+.tag{color:#64748b;border-color:#e2e8f0}
+.btn,.manual-pad button,.map-tools>button{background:#fff;border-color:#cbd5e1;color:#0f172a}
+.btn:hover,.map-tools>button:hover{background:#f1f8fc;border-color:#7dd3fc}
+.btn.primary{background:#0284c7;border-color:#0284c7;color:#fff;box-shadow:0 3px 10px rgba(2,132,199,.16)}
+.btn.primary:hover{background:#0369a1}
+.btn.on,.map-tools>button.on{border-color:#0284c7;color:#0369a1}
+.segmented,.map-tabs{background:#f1f5f9;border-color:#e2e8f0}
+.segmented button,.map-tabs button{color:#64748b}
+.segmented button:hover{background:#eaf6fc;color:#0f172a}
+.segmented button.on,.map-tabs button.on{background:#e0f2fe;color:#0369a1;box-shadow:inset 0 0 0 1px #bae6fd}
+.tree-node{color:#334155;border-color:#e2e8f0}
+.tree-node .junc{background:#cbd5e1}
+.tree-node .hint,.task-note,.hint{color:#64748b}
+.tree-node.active{background:#eff8ff;border-color:#bae6fd;color:#0f172a}
+.tree-node.active .lbl{color:#0369a1}
+.tree-node.done{color:#475569}
+.bar,.hud-bar,.telbar{background:#e2e8f0}
+.stage{background:#e2e8f0;border-color:#dbe4ee;box-shadow:0 8px 28px rgba(15,23,42,.10)}
+.stage-vignette{background:linear-gradient(180deg,rgba(15,23,42,.18),transparent 20%,transparent 78%,rgba(15,23,42,.18))}
+.cam-presets{background:rgba(255,255,255,.94);border-color:#e2e8f0;backdrop-filter:blur(8px)}
+.cam{color:#475569}
+.cam:hover{color:#0f172a}
+.cam.active{background:#e0f2fe;color:#0369a1;box-shadow:inset 0 0 0 1px #bae6fd}
+.hud{background:rgba(255,255,255,.95);border-color:#dbe4ee;color:#0f172a;box-shadow:0 4px 16px rgba(15,23,42,.08)}
+.hud-row b,.cargo em,.kv b,.tel b,.mini-metrics b{color:#0f172a}
+.hud-row em,.phase-kicker,.mini-metrics span,.tel>span,.tel em{color:#64748b}
+.mini-metrics div{background:#f1f5f9}
+.hud-phase b{color:#0f172a}
+.manual-pad button{color:#0f172a}
+.manual-pad button:active,.manual-pad button.on{background:#e0f2fe;border-color:#0284c7;color:#0369a1}
+.minimap-box,.scan-chart{background:#f8fafc;border-color:#e2e8f0}
+.map-overlay{background:rgba(255,255,255,.88);color:#475569}
+.sw.scan{background:#64748b}
+.cargo{background:#f8fafc;border-color:#e2e8f0}
+.cargo.carried{background:#eff8ff;border-color:#7dd3fc}
+.kv{border-color:#e2e8f0}
+#minimap{background:#f8fafc}

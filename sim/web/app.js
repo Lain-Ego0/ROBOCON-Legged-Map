@@ -331,7 +331,8 @@
     // Camera orbit drag.
     const stage = $("#stage");
     stage.addEventListener("pointerdown", (e) => {
-      if (e.target.closest("button")) return;
+      if (e.button !== 1 || e.target.closest("button")) return;
+      e.preventDefault();
       dragging = { x: e.clientX, y: e.clientY, moved: 0 };
       stage.setPointerCapture(e.pointerId);
     });
@@ -342,7 +343,7 @@
       dragging.moved += Math.abs(dx) + Math.abs(dy);
       if (dragging.moved > 4) {
         if (cameraMode !== "orbit") setCamera("orbit", true);
-        post("/api/camera", { mode: "orbit_delta", dazimuth: -dx * 0.28, delevation: dy * 0.22 });
+        post("/api/camera", { mode: "orbit_delta", dazimuth: -dx * 0.28, delevation: -dy * 0.22 });
       }
     });
     const stopDrag = () => { dragging = null; };
