@@ -37,7 +37,7 @@ def main():
     sensor_ids = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SENSOR, name) for name in ("imu_accel", "imu_gyro")]
     sensor_adrs = [int(model.sensor_adr[sid]) for sid in sensor_ids]
     glim_build_dir = pathlib.Path(
-        os.environ.get("ROBOCON_GLIM_BUILD_DIR", root / "build/glim-cpu-runtime-no-cuda")
+        os.environ.get("ROBOCON_GLIM_BUILD_DIR", root / "build/glim-conda-runtime")
     )
     if not glim_build_dir.is_absolute():
         glim_build_dir = root / glim_build_dir

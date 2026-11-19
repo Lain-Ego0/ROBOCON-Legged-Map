@@ -3,8 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GLIM_SOURCE="${GLIM_SOURCE:-$ROOT/build/glim-upstream}"
-BUILD_DIR="${GLIM_BUILD_DIR:-$ROOT/build/glim-cpu-runtime-no-cuda}"
-PATCHED_SOURCE="${GLIM_PATCHED_SOURCE_DIR:-$ROOT/build/glim-cpu-source}"
+BUILD_DIR="${GLIM_BUILD_DIR:-$ROOT/build/glim-conda-runtime}"
+PATCHED_SOURCE="${GLIM_PATCHED_SOURCE_DIR:-$ROOT/build/glim-conda-source}"
 GTSAM_POINTS_DIR="${GTSAM_POINTS_DIR:-}"
 COMPAT_PATCH="$ROOT/slam3d/patches/glim-conda-api-compat.patch"
 
@@ -26,7 +26,10 @@ if ((${#missing[@]})); then
 fi
 
 mkdir -p "$PATCHED_SOURCE"
-cp -a "$GLIM_SOURCE/." "$PATCHED_SOURCE/"
+if [[ "$PATCHED_SOURCE" == "$ROOT/build/glim-conda-source" ]]; then
+  find "$PATCHED_SOURCE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+fi
+tar --exclude=.git -C "$GLIM_SOURCE" -cf - . | tar -C "$PATCHED_SOURCE" -xf -
 if ! rg -q 'pred_T_odom_imu\.pose\(\)\.rotation\(\)' \
   "$PATCHED_SOURCE/src/glim/odometry/robust_initial_state_estimation_odom.cpp"; then
   if ! patch -d "$PATCHED_SOURCE" -p1 --forward --silent < "$COMPAT_PATCH"; then

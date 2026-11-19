@@ -89,10 +89,37 @@ class GLIMBridge:
         if not self.binary.is_file():
             raise FileNotFoundError(f"GLIM bridge executable not found: {self.binary}")
         env = os.environ.copy()
+        configured_dirs = [
+            Path(directory).expanduser()
+            for directory in env.get("ROBOCON_GLIM_LIBRARY_DIRS", "").split(os.pathsep)
+            if directory
+        ]
+        library_dirs = [self.library_dir, *configured_dirs]
         old_path = env.get("LD_LIBRARY_PATH", "")
-        env["LD_LIBRARY_PATH"] = f"{self.library_dir}:{old_path}" if old_path else str(self.library_dir)
+        inherited_dirs = [Path(directory) for directory in old_path.split(os.pathsep) if directory]
+        search_dirs = list(dict.fromkeys(str(directory.resolve()) for directory in [*library_dirs, *inherited_dirs]))
+        env["LD_LIBRARY_PATH"] = os.pathsep.join(search_dirs)
         log_path = Path(os.environ.get("GLIM_BRIDGE_LOG", "/tmp/robocon-glim-bridge.log"))
         self.log_file = log_path.open("w", encoding="utf-8")
+        dependencies = subprocess.run(
+            ["ldd", str(self.binary)],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        if dependencies.returncode != 0:
+            self.log_file.write(dependencies.stderr or dependencies.stdout)
+            self.log_file.flush()
+            raise RuntimeError(
+                f"Unable to inspect GLIM bridge dependencies with ldd (exit {dependencies.returncode})"
+            )
+        missing = [line.strip() for line in dependencies.stdout.splitlines() if "not found" in line]
+        if missing:
+            details = "\n".join(missing)
+            self.log_file.write(f"Unresolved GLIM runtime dependencies:\n{details}\n")
+            self.log_file.flush()
+            raise RuntimeError(f"GLIM runtime dependencies are missing:\n{details}")
         try:
             process = subprocess.Popen(
                 [str(self.binary), str(self.config_dir), str(self.library_dir)],
@@ -133,21 +160,20 @@ class GLIMBridge:
 
     def _stop_process(self):
         process, self.process = self.process, None
-        if process is None:
-            return
-        if process.stdin:
-            process.stdin.close()
-        try:
-            process.wait(timeout=2.0)
-        except subprocess.TimeoutExpired:
-            process.terminate()
+        if process is not None:
+            if process.stdin:
+                process.stdin.close()
             try:
-                process.wait(timeout=1.0)
+                process.wait(timeout=2.0)
             except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
-        if hasattr(self, "stderr_thread"):
-            self.stderr_thread.join(timeout=1.0)
+                process.terminate()
+                try:
+                    process.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+            if hasattr(self, "stderr_thread"):
+                self.stderr_thread.join(timeout=1.0)
         if self.log_file is not None:
             self.log_file.close()
             self.log_file = None

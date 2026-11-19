@@ -232,7 +232,7 @@ class Simulator(threading.Thread):
         self.localizer = GLIMLocalizer(START_LOGISTICS[:2], 0.0)
         root = pathlib.Path(__file__).resolve().parents[1]
         glim_build_dir = pathlib.Path(
-            os.environ.get("ROBOCON_GLIM_BUILD_DIR", root / "build/glim-cpu-runtime-no-cuda")
+            os.environ.get("ROBOCON_GLIM_BUILD_DIR", root / "build/glim-conda-runtime")
         )
         if not glim_build_dir.is_absolute():
             glim_build_dir = root / glim_build_dir

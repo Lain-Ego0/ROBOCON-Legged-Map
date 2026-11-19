@@ -3,8 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 SOURCE_DIR="${GTSAM_POINTS_SOURCE_DIR:-$ROOT/build/gtsam-points-cpu-source/source}"
-BUILD_DIR="${GTSAM_POINTS_BUILD_DIR:-$ROOT/build/gtsam-points-cpu-build}"
-INSTALL_PREFIX="${GTSAM_POINTS_INSTALL_PREFIX:-$ROOT/build/gtsam-points-cpu}"
+BUILD_DIR="${GTSAM_POINTS_BUILD_DIR:-$ROOT/build/gtsam-points-conda-build}"
+INSTALL_PREFIX="${GTSAM_POINTS_INSTALL_PREFIX:-$ROOT/build/glim-conda-deps}"
 VERSION_TAG="${GTSAM_POINTS_VERSION_TAG:-v1.2.2}"
 
 if ! command -v cmake >/dev/null 2>&1; then
@@ -43,4 +43,4 @@ if [[ ! -f "$CONFIG" ]] || rg -q 'set\(GTSAM_POINTS_USE_CUDA 1\)' "$CONFIG"; the
 fi
 
 printf '\ngtsam_points CPU build installed at %s\n' "$INSTALL_PREFIX"
-printf 'Build GLIM with GTSAM_POINTS_DIR=%s/lib/cmake/gtsam_points ./slam3d/build_glim.sh\n' "$INSTALL_PREFIX"
+printf 'Build GLIM with GTSAM_POINTS_DIR=%s/lib/cmake/gtsam_points ./scripts/with_project_env.sh ./slam3d/build_glim.sh\n' "$INSTALL_PREFIX"

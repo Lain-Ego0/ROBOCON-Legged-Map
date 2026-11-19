@@ -2,16 +2,27 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BUILD_DIR="${GLIM_BUILD_DIR:-$ROOT/build/glim-cpu-runtime-no-cuda}"
+BUILD_DIR="${GLIM_BUILD_DIR:-$ROOT/build/glim-conda-runtime}"
 CORE="$BUILD_DIR/libglim.so"
 ODOMETRY_PLUGIN="$BUILD_DIR/libodometry_estimation_cpu.so"
 SUBMAPPING_PLUGIN="$BUILD_DIR/libsub_mapping_passthrough.so"
 GLOBAL_MAPPING_PLUGIN="$BUILD_DIR/libglobal_mapping_pose_graph.so"
+EXTRA_LIBRARY_DIRS="${ROBOCON_GLIM_LIBRARY_DIRS:-}"
+if [[ -n "$EXTRA_LIBRARY_DIRS" ]]; then
+  export LD_LIBRARY_PATH="$BUILD_DIR:$EXTRA_LIBRARY_DIRS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+else
+  export LD_LIBRARY_PATH="$BUILD_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
 
 for library in "$CORE" "$ODOMETRY_PLUGIN" "$SUBMAPPING_PLUGIN" "$GLOBAL_MAPPING_PLUGIN" "$BUILD_DIR/mujoco_glim_bridge"; do
   if [[ ! -f "$library" ]]; then
     printf 'Missing build output: %s\n' "$library" >&2
     exit 2
+  fi
+  unresolved="$(ldd "$library" | rg 'not found' || true)"
+  if [[ -n "$unresolved" ]]; then
+    printf 'Unresolved runtime dependencies in %s:\n%s\n' "$library" "$unresolved" >&2
+    exit 4
   fi
   if ldd "$library" | rg -qi 'lib(cuda|cudart|gtsam_points_cuda)'; then
     printf 'CPU GLIM output still depends on a CUDA library: %s\n' "$library" >&2

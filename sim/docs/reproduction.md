@@ -1,68 +1,73 @@
 # 环境搭建与运行复现
 
-本文记录从克隆仓库到运行仿真的环境准备方法。Python 依赖由 `pyproject.toml` 和 `uv.lock` 固定；GLIM、GTSAM 和 C++ 编译器属于原生依赖，不由 Python 锁文件管理。仿真和 GLIM 通过子进程标准输入输出传递传感器数据和位姿，不需要 ROS。
+本文记录从克隆仓库到运行仿真的环境准备方法。Python、CPU PyTorch、MuJoCo、GLIM 构建工具和 C++ 依赖统一安装到 `build/robocon-env/` 中的单一 Conda 环境。仿真和 GLIM 通过子进程标准输入输出传递传感器数据和位姿，不需要 ROS。
 
 ## 1. 目录与依赖
 
-克隆项目后进入仓库根目录，运行一键配置脚本。若系统中没有 `uv`，脚本会将其安装到当前用户目录：
+克隆项目后进入仓库根目录，安装 Miniforge 或 Miniconda，再运行一键配置脚本。脚本会创建位于 `build/robocon-env/` 的固定 Conda 环境，并将 GLIM 源码、构建缓存和安装文件保存在仓库构建目录中：
 
 ```bash
 ./scripts/setup_env.sh
 ```
 
-脚本使用 `.python-version` 选择 Python 3.12，并按 `uv.lock` 安装仿真依赖。完整模式还会构建 CPU 版 GLIM 里程计与点云匹配模块并检查动态库。脚本不会使用系统包管理器安装 C++ 库；依赖未就绪时会列出缺项并退出。只需要 Python 环境时运行：
+环境清单固定 Python 3.12、CPU-only PyTorch 和 MuJoCo。完整模式会自动获取固定版本源码，构建 CPU 版 GLIM 里程计与点云匹配模块，并运行动态库检查和传感器回放。只需要运行仿真而暂不构建 GLIM 时运行：
 
 ```bash
 ./scripts/setup_env.sh --python-only
 ```
 
-随后启动仿真：
+配置完成后启动仿真：
 
 ```bash
-ROBOCON_GLIM_BUILD_DIR=build/glim-cpu-runtime-no-cuda uv run python -m sim.app --port 8731 --no-open
+./run_sim.sh --port 8731 --no-open
 ```
 
-策略模型和 GLIM 均运行在 CPU 上，不要求 NVIDIA GPU 或 CUDA Toolkit。若 `uv.lock` 有意更新，应使用 `uv lock` 生成并提交新的锁文件；复现环境时配置脚本使用 `uv sync --locked`，检测到清单与锁文件不一致会停止。
+`run_sim.sh` 会自动激活仓库中的 Conda 环境。GLIM 启动前会检查桥接程序的动态依赖，缺少库时会在页面状态和 `/tmp/robocon-glim-bridge.log` 中列出未解析项，避免仿真持续排队丢弃扫描。高级用法可通过 `ROBOCON_ENV_PREFIX`、`GTSAM_POINTS_INSTALL_PREFIX` 和 `GLIM_BUILD_DIR` 覆盖默认构建路径。
 
-原生构建需要 CMake、GTSAM 4.2+、`gtsam_points` 1.2.2+、Eigen3、Boost serialization、OpenMP 和 spdlog。配置脚本会从上游获取 `gtsam_points` 1.2.2，并以 `BUILD_WITH_CUDA=OFF` 编译安装。系统仍需预先提供 GTSAM、编译工具链和其余原生依赖。GLIM CPU 后端使用 GICP 做帧间匹配、直通子图生成和 GICP 位姿图回环优化。整个运行链使用 CPU 版本 PyTorch 和 CPU-only `gtsam_points`，无需安装 NVIDIA 驱动或 CUDA Toolkit。
+策略模型和 GLIM 均运行在 CPU 上，不要求 NVIDIA GPU 或 CUDA Toolkit。环境定义位于 `slam3d/native-environment.yml`。策略推理固定使用 PyTorch CPU wheel，MuJoCo 使用与传感器接口匹配的 3.17.0 wheel。整个运行流程不安装或调用 CUDA。
 
-从 GLIM 官方仓库获取源码并放在构建目录：
+C++ 构建依赖也由 `slam3d/native-environment.yml` 固定，当前支持 Linux x86-64。构建工具链以 glibc 2.28 为目标，覆盖 glibc 2.28 及以上的常见 Linux 发行版。`gtsam_points` 使用上游 v1.2.2，GLIM 使用固定提交 `1a197c999e4865f5cab7c9cd25474128413ebbca`。首次运行配置脚本会自动获取源码、构建 CPU 版本并执行动态库验收及传感器回放。构建缓存、依赖和运行库都保存在仓库的 `build/` 目录中。GLIM CPU 后端使用 GICP 做帧间匹配、直通子图生成和 GICP 位姿图回环优化。整个运行链使用 CPU 版本 PyTorch 和 CPU-only `gtsam_points`，无需 NVIDIA 驱动或 CUDA Toolkit。
+
+若要手动获取 GLIM 源码，可检出项目固定提交：
 
 ```bash
-mkdir -p build
 git clone https://github.com/koide3/glim.git build/glim-upstream
+git -C build/glim-upstream checkout --detach 1a197c999e4865f5cab7c9cd25474128413ebbca
 ```
 
-也可以把源码放在其他目录，并用 `GLIM_SOURCE` 指定。构建脚本会把源码复制到忽略的 `build/glim-cpu-source/`，再应用本仓库的 API 兼容补丁；不会直接修改原始 GLIM 源码。
+构建脚本会复制源码到忽略的 `build/glim-conda-source/`，再应用本仓库的 API 兼容补丁，不会修改 GLIM 源码目录。
 
 可通过以下变量选择源码、补丁工作副本和构建输出目录：
 
 ```bash
 GLIM_SOURCE=build/glim-upstream \
-GLIM_PATCHED_SOURCE_DIR=build/glim-cpu-source \
-GLIM_BUILD_DIR=build/glim-cpu-runtime-no-cuda \
-GTSAM_POINTS_DIR=build/glim-cpu-deps/lib/cmake/gtsam_points \
-./slam3d/build_glim.sh
+GLIM_PATCHED_SOURCE_DIR=build/glim-conda-source \
+GTSAM_POINTS_INSTALL_PREFIX=build/glim-conda-deps \
+GLIM_BUILD_DIR=build/glim-conda-runtime \
+GTSAM_POINTS_DIR=build/glim-conda-deps/lib/cmake/gtsam_points \
+./scripts/with_project_env.sh ./slam3d/build_glim.sh
 ```
 
-仿真应用默认从 `build/glim-cpu-runtime-no-cuda/` 加载桥接程序和动态库，也可通过 `ROBOCON_GLIM_BUILD_DIR` 指定其他构建目录。配置脚本会将 `gtsam_points` 安装到 `build/glim-cpu-deps/`，并将 GLIM 输出到上述目录。
+仿真应用默认从 `build/glim-conda-runtime/` 加载桥接程序和动态库，也可通过 `ROBOCON_GLIM_BUILD_DIR` 指定其他构建目录。配置脚本会将 `gtsam_points` 安装到 `build/glim-conda-deps/`，并将 GLIM 输出到上述目录。
 
 ## 2. 构建 GLIM
 
-构建时先激活包含 CMake 和 GLIM C++ 依赖的环境，然后运行：
+手动构建时通过仓库脚本激活统一 Conda 环境：
 
 ```bash
-./slam3d/build_glim.sh
+./scripts/with_project_env.sh ./scripts/build_gtsam_points_cpu.sh
+GTSAM_POINTS_DIR=build/glim-conda-deps/lib/cmake/gtsam_points \
+  ./scripts/with_project_env.sh ./slam3d/build_glim.sh
 ```
 
 成功后应至少生成以下文件：
 
 ```text
-build/glim-cpu-runtime-no-cuda/mujoco_glim_bridge
-build/glim-cpu-runtime-no-cuda/libglim.so
-build/glim-cpu-runtime-no-cuda/libodometry_estimation_cpu.so
-build/glim-cpu-runtime-no-cuda/libsub_mapping_passthrough.so
-build/glim-cpu-runtime-no-cuda/libglobal_mapping_pose_graph.so
+build/glim-conda-runtime/mujoco_glim_bridge
+build/glim-conda-runtime/libglim.so
+build/glim-conda-runtime/libodometry_estimation_cpu.so
+build/glim-conda-runtime/libsub_mapping_passthrough.so
+build/glim-conda-runtime/libglobal_mapping_pose_graph.so
 ```
 
 构建失败时先检查：
@@ -86,12 +91,12 @@ test -f build/glim-upstream/CMakeLists.txt
 GLIM CPU odometry, passthrough submapping, and pose-graph modules loaded successfully
 ```
 
-若提示找不到动态库，先使用与构建时相同的 Conda 环境运行检查。
+标准启动脚本会自动激活同一 Conda 环境并检查动态库。若手动指定了不同的构建目录，请在对应环境中运行验证脚本。
 
 ## 4. 启动仿真
 
 ```bash
-ROBOCON_GLIM_BUILD_DIR=build/glim-cpu-runtime-no-cuda uv run python -m sim.app --port 8731 --no-open
+ROBOCON_GLIM_BUILD_DIR=build/glim-conda-runtime ./run_sim.sh --port 8731 --no-open
 ```
 
 浏览器打开 <http://127.0.0.1:8731/>。如端口被占用，换用空闲端口。启动日志出现 `simulator ready` 表示 HTTP 服务已启动，但不代表 GLIM 已经给出定位结果。应用会在任务启动前持续采集传感器数据并初始化估计器。
@@ -109,7 +114,7 @@ ROBOCON_GLIM_BUILD_DIR=build/glim-cpu-runtime-no-cuda uv run python -m sim.app -
 任务赛须先在小地图编辑并确认物资布置，再启动任务。验收自主导航时，等 `glim_valid` 为真后再开始；如果位姿超时，机器人停车是预期的安全行为。可以用 `/api/mission` 的 `reset` 动作验证任务和 GLIM 重启：
 
 ```bash
-uv run python - <<'PY'
+python - <<'PY'
 import json
 from urllib.request import Request, urlopen
 
@@ -136,7 +141,7 @@ ps -eo pid,ppid,cmd | grep -E 'sim\.app|mujoco_glim_bridge' | grep -v grep
 回放使用 MuJoCo Python 环境生成传感器数据，并将数据送入原生 GLIM：
 
 ```bash
-ROBOCON_GLIM_BUILD_DIR=build/glim-cpu-runtime-no-cuda uv run python slam3d/replay_mujoco.py --duration 24
+ROBOCON_GLIM_BUILD_DIR=build/glim-conda-runtime ./scripts/with_project_env.sh python slam3d/replay_mujoco.py --duration 24
 ```
 
 当前仿真传感器参数按 Mid-360 的在线时序设置：3D LiDAR 为 10 Hz，IMU
@@ -190,7 +195,7 @@ ROBOCON_LIDAR_PROFILE=high_fidelity ./run_sim.sh
 ## 其他检查
 
 ```bash
-uv run python -m compileall -q sim slam3d
+python -m compileall -q sim slam3d
 node --check sim/web/app.js
 git diff --check
 ```

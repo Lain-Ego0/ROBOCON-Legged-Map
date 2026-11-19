@@ -8,33 +8,29 @@ its latest pose is more than 0.75 simulated seconds old.
 
 ## Build
 
-GLIM upstream source remains unchanged outside this repository. Place a GLIM
-checkout in `build/glim-upstream/`; the build script copies it into the ignored
-`build/glim-cpu-source/`, applies the API compatibility patch in
-`slam3d/patches/`, builds CPU odometry, passthrough submapping, GICP pose-graph
-modules and the native sensor bridge, and writes generated files to
-`build/glim-cpu-runtime-no-cuda/`:
+The setup workflow creates a single Conda environment under `build/robocon-env/`,
+fetches fixed GLIM and `gtsam_points` revisions, builds the CPU modules, checks all
+runtime libraries, and runs a sensor replay:
 
 ```bash
-./slam3d/build_glim.sh
+./scripts/setup_env.sh
 ```
 
-Override source, patched-source, or output locations with `GLIM_SOURCE`,
-`GLIM_PATCHED_SOURCE_DIR`, `GTSAM_POINTS_DIR`, and `GLIM_BUILD_DIR`. The build sets
-`BUILD_WITH_CUDA=OFF`; it requires CMake and the GLIM native dependencies.
-It disables the optional GLIM viewer and OpenCV.
-
-Run the CPU module and runtime-linker smoke checks inside the same environment
-after building:
+Build output stays under the ignored `build/` directory. To build individual
+components, activate the single Conda environment through the project wrapper:
 
 ```bash
-./slam3d/validate_glim.sh
+./scripts/with_project_env.sh ./scripts/build_gtsam_points_cpu.sh
+GTSAM_POINTS_DIR=build/glim-conda-deps/lib/cmake/gtsam_points \
+  ./scripts/with_project_env.sh ./slam3d/build_glim.sh
+GLIM_BUILD_DIR=build/glim-conda-runtime \
+  ./scripts/with_project_env.sh ./slam3d/validate_glim.sh
 ```
 
-GLIM's native build requires `gtsam_points` 1.2.2+, GTSAM 4.2+,
-Eigen3, Boost serialization, OpenMP, and spdlog. ROS 2 is not required to
-build the GLIM core; a ROS 2 Jazzy adapter can be added independently if the
-simulator is later moved to ROS message transport.
+The complete Conda package set is described by `native-environment.yml`. The
+compiler uses the glibc 2.28 sysroot for broad Linux binary compatibility. The build sets `BUILD_WITH_CUDA=OFF` and
+disables the optional GLIM viewer and OpenCV. ROS 2 is not required to build
+the GLIM core.
 
 ## Runtime Sensor Bridge
 
@@ -61,11 +57,11 @@ detection and bounded replanning remain enabled.
 ## Verification
 
 From the repository root, run the CPU module smoke check and sensor replay
-with environments that provide the native GLIM libraries and MuJoCo:
+with the project Conda environment activated:
 
 ```bash
-./slam3d/validate_glim.sh
-uv run python slam3d/replay_mujoco.py --duration 24
+./scripts/with_project_env.sh ./slam3d/validate_glim.sh
+./scripts/with_project_env.sh python slam3d/replay_mujoco.py --duration 24
 ```
 
 The replay advances simulation faster than real time. Use it to check the

@@ -4,16 +4,16 @@
 
 ## 启动
 
-需要 Linux、可用的图形设备与 EGL。首次配置 Python 依赖；若未安装 `uv`，脚本会安装到当前用户目录：
+需要 Linux、可用的图形设备与 EGL。首次配置唯一的 Conda 环境（Python、CPU PyTorch、MuJoCo 与 C++ 构建依赖）：
 
 ```bash
 ./scripts/setup_env.sh --python-only
 ```
 
-GLIM、策略推理和点云处理均使用 CPU，不需要 NVIDIA 驱动或 CUDA Toolkit。需要 3D 定位时，先按[复现说明](sim/docs/reproduction.md)准备 GLIM 的 CPU 原生依赖和源码，再运行 `./scripts/setup_env.sh` 完成检查、构建和验证。启动仿真：
+GLIM、策略推理和点云处理均使用 CPU，不需要 NVIDIA 驱动或 CUDA Toolkit。需要 3D 定位时，运行 `./scripts/setup_env.sh` 自动准备统一的 Conda 环境、获取固定版本源码、构建并验证 GLIM CPU 后端。启动仿真：
 
 ```bash
-uv run python -m sim.app --no-open
+./run_sim.sh --no-open
 ```
 
 浏览器访问 <http://127.0.0.1:8731/>。若端口已占用，可以添加 `--port 8740`。完整环境准备、构建与验收步骤见[复现说明](sim/docs/reproduction.md)。仿真服务退出时会一并关闭它启动的 GLIM 子进程；结束服务可在启动终端按 `Ctrl+C`。
@@ -35,7 +35,7 @@ uv run python -m sim.app --no-open
 ## 常用检查
 
 ```bash
-uv run python -m compileall -q sim slam3d
+python -m compileall -q sim slam3d
 node --check sim/web/app.js
 git diff --check
 ```

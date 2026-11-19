@@ -8,8 +8,8 @@ usage() {
   cat <<'EOF'
 Usage: ./scripts/setup_env.sh [--python-only]
 
-Prepare the locked Python environment. By default, also build and validate the
-GLIM CPU backend when its source and native dependencies are available.
+Create or reuse the single project Conda environment. By default, build CPU GLIM
+and validate its runtime as well.
 
 Options:
   --python-only  Set up Python dependencies without building GLIM.
@@ -26,28 +26,11 @@ while (($#)); do
   shift
 done
 
-if ! command -v uv >/dev/null 2>&1; then
-  if ! command -v curl >/dev/null 2>&1; then
-    printf 'uv is missing and curl is unavailable. Install uv, then rerun this script.\n' >&2
-    exit 127
-  fi
-  installer="$(mktemp)"
-  trap 'rm -f "$installer"' EXIT
-  curl --fail --location --silent --show-error https://astral.sh/uv/install.sh -o "$installer"
-  sh "$installer"
-  export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
-  if ! command -v uv >/dev/null 2>&1; then
-    printf 'uv installation completed, but uv was not found in the expected user paths.\n' >&2
-    exit 127
-  fi
-fi
-
 cd "$ROOT"
-uv python install 3.12
-uv sync --locked
+./scripts/with_project_env.sh true
 
 printf '\nChecking Python simulator dependencies...\n'
-uv run python - <<'PY'
+./scripts/with_project_env.sh python - <<'PY'
 import importlib
 
 for module in ("mujoco", "numpy", "PIL", "scipy", "torch"):
@@ -57,46 +40,61 @@ import mujoco
 import torch
 
 if torch.version.cuda is not None:
-    raise RuntimeError("A CPU-only PyTorch build is required, but this wheel includes CUDA")
+    raise RuntimeError("CPU-only PyTorch is required, but CUDA is available")
 
 print(f"MuJoCo {mujoco.__version__}")
 print(f"PyTorch {torch.__version__} (policy inference runs on CPU)")
 PY
 
 if [[ "$MODE" == "python-only" ]]; then
-  printf '\nPython environment is ready. Run the simulator with: uv run python -m sim.app --no-open\n'
+  printf '\nConda environment is ready. The GLIM backend was not built in --python-only mode.\n'
   exit 0
 fi
 
-GLIM_SOURCE="${GLIM_SOURCE:-$ROOT/build/glim-upstream}"
-missing=()
-for tool in cmake; do
-  command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
-done
-[[ -f "$GLIM_SOURCE/CMakeLists.txt" ]] || missing+=("GLIM source at $GLIM_SOURCE")
+NATIVE_PREFIX="${ROBOCON_ENV_PREFIX:-$ROOT/build/robocon-env}"
 
-if ((${#missing[@]})); then
-  printf '\nPython environment is ready, but the GLIM backend cannot be built yet.\n' >&2
-  printf 'Missing native prerequisites:\n' >&2
-  printf '  - %s\n' "${missing[@]}" >&2
-  printf '\nInstall CMake, GTSAM, gtsam_points and GLIM native dependencies,\n' >&2
-  printf 'then place a compatible GLIM checkout in build/glim-upstream/ or set GLIM_SOURCE.\n' >&2
-  printf 'See sim/docs/reproduction.md for the native dependency list.\n' >&2
-  exit 2
+if ! command -v git >/dev/null 2>&1; then
+  printf 'Git is required to fetch the pinned GLIM source.\n' >&2
+  exit 127
 fi
 
-GTSAM_POINTS_INSTALL_PREFIX="${GTSAM_POINTS_INSTALL_PREFIX:-$ROOT/build/glim-cpu-deps}"
-GLIM_BUILD_DIR="${GLIM_BUILD_DIR:-$ROOT/build/glim-cpu-runtime-no-cuda}"
-printf '\nBuilding CPU-only gtsam_points dependency...\n'
-GTSAM_POINTS_INSTALL_PREFIX="$GTSAM_POINTS_INSTALL_PREFIX" ./scripts/build_gtsam_points_cpu.sh
+GLIM_SOURCE="${GLIM_SOURCE:-$ROOT/build/glim-upstream}"
+GLIM_COMMIT="1a197c999e4865f5cab7c9cd25474128413ebbca"
+if [[ ! -f "$GLIM_SOURCE/CMakeLists.txt" ]]; then
+  mkdir -p "$(dirname "$GLIM_SOURCE")"
+  git clone --filter=blob:none --no-checkout https://github.com/koide3/glim.git "$GLIM_SOURCE"
+  git -C "$GLIM_SOURCE" fetch --depth 1 origin "$GLIM_COMMIT"
+  git -C "$GLIM_SOURCE" checkout --detach "$GLIM_COMMIT"
+elif [[ "$GLIM_SOURCE" == "$ROOT/build/glim-upstream" ]]; then
+  git -C "$GLIM_SOURCE" fetch --depth 1 origin "$GLIM_COMMIT"
+  git -C "$GLIM_SOURCE" checkout --detach "$GLIM_COMMIT"
+fi
 
-printf '\nBuilding GLIM CPU backend...\n'
+GTSAM_POINTS_INSTALL_PREFIX="${GTSAM_POINTS_INSTALL_PREFIX:-$ROOT/build/glim-conda-deps}"
+GLIM_BUILD_DIR="${GLIM_BUILD_DIR:-$ROOT/build/glim-conda-runtime}"
+GLIM_PATCHED_SOURCE_DIR="${GLIM_PATCHED_SOURCE_DIR:-$ROOT/build/glim-conda-source}"
+printf '\nUsing the project Conda environment at %s...\n' "$NATIVE_PREFIX"
+./scripts/with_project_env.sh true
+
+printf '\nBuilding CPU-only gtsam_points dependency...\n'
+GTSAM_POINTS_INSTALL_PREFIX="$GTSAM_POINTS_INSTALL_PREFIX" \
+  ./scripts/with_project_env.sh ./scripts/build_gtsam_points_cpu.sh
+
+printf '\nBuilding CPU GLIM at pinned commit %s...\n' "$GLIM_COMMIT"
 GLIM_SOURCE="$GLIM_SOURCE" \
+GLIM_PATCHED_SOURCE_DIR="$GLIM_PATCHED_SOURCE_DIR" \
 GLIM_BUILD_DIR="$GLIM_BUILD_DIR" \
 GTSAM_POINTS_DIR="$GTSAM_POINTS_INSTALL_PREFIX/lib/cmake/gtsam_points" \
-./slam3d/build_glim.sh
-printf '\nValidating GLIM CPU modules...\n'
-GLIM_BUILD_DIR="$GLIM_BUILD_DIR" ./slam3d/validate_glim.sh
+  ./scripts/with_project_env.sh ./slam3d/build_glim.sh
+
+printf '\nValidating CPU GLIM modules and runtime dependencies...\n'
+GLIM_BUILD_DIR="$GLIM_BUILD_DIR" \
+ROBOCON_GLIM_LIBRARY_DIRS="$NATIVE_PREFIX/lib:$GTSAM_POINTS_INSTALL_PREFIX/lib" \
+  ./scripts/with_project_env.sh ./slam3d/validate_glim.sh
+
+printf '\nRunning an end-to-end GLIM sensor replay...\n'
+ROBOCON_GLIM_BUILD_DIR="$GLIM_BUILD_DIR" \
+  ./scripts/with_project_env.sh python slam3d/replay_mujoco.py --duration 8
 
 GLIM_BUILD_DIR_RELATIVE="$(realpath --relative-to="$ROOT" "$GLIM_BUILD_DIR")"
-printf '\nEnvironment setup complete. Start the simulator with: ROBOCON_GLIM_BUILD_DIR="%s" uv run python -m sim.app --no-open\n' "$GLIM_BUILD_DIR_RELATIVE"
+printf '\nEnvironment setup complete. Start the simulator with: ROBOCON_GLIM_BUILD_DIR="%s" ./run_sim.sh --no-open\n' "$GLIM_BUILD_DIR_RELATIVE"
